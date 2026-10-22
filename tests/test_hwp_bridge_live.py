@@ -113,3 +113,22 @@ def test_restore_marks_after_clear(bridge):
     assert bridge.can_restore() and not bridge.has_marks()
     assert bridge.restore_marks() == 2 and bridge.has_marks() and not bridge.can_restore()
     assert bridge._marks == {"2027년": (255, 240, 0), "202699001": (255, 120, 120)}
+
+
+def test_apply_only_chosen_occurrence_then_undo_restores_exactly(bridge):
+    bridge._type_at_start("참여 6시간 6 끝 ")  # 문서: "참여 6시간 6 끝 2026년 행사, 학번 202699001"
+    before = bridge.read_text()
+    (_, n1, pos1), = bridge.apply([Edit("6", "8", "", nths=(1,))])  # 0번째 = "6시간"의 6, 1번째 = 홀로 있는 6
+    assert n1 == 1 and "참여 6시간 8 끝" in bridge.read_text()
+    (_, n2, pos2), = bridge.apply([Edit("2026년", "2027학년도", "")])  # 길이가 다른 수정도 섞어서
+    assert n2 == 1
+    done = [{"find": "6", "replace": "8", "pos": pos1}, {"find": "2026년", "replace": "2027학년도", "pos": pos2}]
+    assert bridge.undo(done) == (2, 0)
+    assert bridge.read_text() == before
+
+
+def test_undo_skips_spot_user_changed(bridge):
+    (_, n, pos), = bridge.apply([Edit("2026년", "2027년", "")])
+    bridge._type_at_start("x")  # 같은 문단 앞에 글자가 생겨 자리가 밀림 → 엉뚱한 곳을 바꾸지 않고 건너뜀
+    assert bridge.undo([{"find": "2026년", "replace": "2027년", "pos": pos}]) == (0, 1)
+    assert "2027년" in bridge.read_text()

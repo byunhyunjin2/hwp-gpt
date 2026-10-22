@@ -43,9 +43,14 @@ class Tools:
         if name.strip():
             session.write(self.s, "doc_type", {"name": name.strip()})
 
+    @staticmethod
+    def _numbered(doc: str) -> list[tuple[int, str]]:
+        """빈 줄을 뺀 줄들 (문서 속 시작 위치, 원래 글). 줄 번호 = 이 목록의 1부터 순서."""
+        return [(m.start(), m.group()) for m in re.finditer(r"[^\r\n]+", doc) if m.group().strip()]
+
     def _lines(self) -> list[str]:
-        """빈 줄을 빼고 줄 안의 연속 공백을 하나로 (AI에 보내는 토큰 절약)."""
-        return [" ".join(ln.split()) for ln in re.split(r"\r\n|\r|\n", self.b.read_text()) if ln.strip()]
+        """'줄번호| 글' — 줄 안의 연속 공백은 하나로 (AI에 보내는 토큰 절약). 번호로 바꿀 자리를 정확히 고른다."""
+        return [f"{i}| {' '.join(t.split())}" for i, (_, t) in enumerate(self._numbered(self.b.read_text()), 1)]
 
     @_safe
     def read_document(self, doc_type: str = "") -> dict:
@@ -53,15 +58,31 @@ class Tools:
         return {"text": "\n".join(self._lines())}
 
     @_safe
-    def find_lines(self, pattern: str, doc_type: str = "") -> dict:
+    def find_lines(self, pattern: str, doc_type: str = "", around: int = 0) -> dict:
         try:
             rx = re.compile(pattern)
         except re.error as e:
             return {"error": f"정규식 오류: {e}"}
         self._doc_type(doc_type)
         lines = self._lines()
-        hits = [ln for ln in lines if rx.search(ln)]
-        return {"lines": hits[:MAX_LINES], "total_lines": len(lines), "more": max(0, len(hits) - MAX_LINES)}
+        hits = [i for i, ln in enumerate(lines) if rx.search(ln.split("| ", 1)[1])]
+        around = max(0, min(int(around), 8))  # 표 머리 칸 확인용 앞뒤 줄
+        show = sorted({j for i in hits[:MAX_LINES] for j in range(i - around, i + around + 1) if 0 <= j < len(lines)})
+        return {"lines": [lines[j] for j in show], "total_lines": len(lines), "more": max(0, len(hits) - MAX_LINES)}
+
+    def _target(self, find: str, line_nos, doc: str) -> tuple[tuple[int, ...] | None, tuple[str, ...]]:
+        """줄 번호들 → 그 줄 안에 있는 find가 문서 전체에서 몇 번째들인지(0부터)와 그 줄들. 줄을 안 주면 (None, ())."""
+        if not line_nos:
+            return None, ()
+        rows = self._numbered(doc)
+        nths, ctx = [], []
+        for n in line_nos:
+            if isinstance(n, int) and 1 <= n <= len(rows) and find in rows[n - 1][1]:
+                start, text = rows[n - 1]
+                before = doc.count(find, 0, start)
+                nths += range(before, before + text.count(find))
+                ctx.append(text)
+        return tuple(sorted(set(nths))), tuple(ctx)
 
     @_safe
     def apply_edits(self, edits: list[dict], checks: list[dict] | None = None) -> dict:
@@ -73,14 +94,21 @@ class Tools:
 
     def _apply(self, edits: list[dict]) -> dict:
         doc = self.b.read_text()
-        items = [Edit(resolve_text(e.get("find", ""), doc), e.get("replace", ""), e.get("reason", "")) for e in edits]
+        items, lines_of = [], {}
+        for e in edits:
+            find = resolve_text(e.get("find", ""), doc)
+            nths, ctx = self._target(find, e.get("lines"), doc)
+            items.append(Edit(find, e.get("replace", ""), e.get("reason", ""), nths, ctx))
+            lines_of[id(items[-1])] = e.get("lines")
         ok, rejected = validate_edits(doc, items)
         applied = []
-        for e, n in self.b.apply(ok) if ok else []:
+        for e, n, pos in self.b.apply(ok) if ok else []:
             if not n and strip_unit(e.find) and strip_unit(e.replace):  # 표 칸의 '원'이 떨어져 있으면 숫자만으로
-                e = Edit(strip_unit(e.find), strip_unit(e.replace), e.reason)
-                n = self.b.apply([e])[0][1]
-            a = {"find": e.find, "replace": e.replace, "count": n}
+                f = strip_unit(e.find)
+                nths, ctx = self._target(f, lines_of.get(id(e)), doc)
+                e = Edit(f, strip_unit(e.replace), e.reason, nths, ctx)
+                _, n, pos = self.b.apply([e])[0]
+            a = {"find": e.find, "replace": e.replace, "count": n, "pos": pos}
             session.write(self.s, "applied", a)
             applied.append(a)
         checks = [self._check(c.text, c.note) for c in rejected]
@@ -125,10 +153,11 @@ def main() -> None:
 
     @mcp.tool()
     @connected
-    def find_lines(pattern: str, doc_type: str = "") -> dict:
-        """정규식에 맞는 줄만 돌려준다 (예: 연도·날짜는 r"20\\d\\d"). 연도 갱신은 이것만으로 충분하다.
+    def find_lines(pattern: str, doc_type: str = "", around: int = 0) -> dict:
+        """정규식에 맞는 줄만 '줄번호| 글'로 돌려준다 (예: 연도·날짜는 r"20\\d\\d"). 연도 갱신은 이것만으로 충분하다.
+        표는 칸마다 한 줄이다. 특정 표·칸을 고칠 땐 around=6처럼 앞뒤 줄도 받아 표 머리 칸(제목·열 이름)을 확인한다.
         doc_type: 문서 종류(예: 앵커사업 운영계획서)를 첫 호출 때 한 번 적는다."""
-        return t.find_lines(pattern, doc_type)
+        return t.find_lines(pattern, doc_type, around)
 
     @mcp.tool()
     @connected
@@ -139,7 +168,9 @@ def main() -> None:
     @mcp.tool()
     @connected
     def apply_edits(edits: list[dict], checks: list[dict] | None = None) -> dict:
-        """여러 수정을 한 번에. edits = [{"find": 문서에 있는 문구 그대로, "replace": 바꿀 문구, "reason": 이유}].
+        """여러 수정을 한 번에. edits = [{"find": 문서에 있는 문구 그대로, "replace": 바꿀 문구, "reason": 이유, "lines": [줄번호]}].
+        lines를 주면 그 줄(find_lines·read_document의 번호)에 있는 것만 바꾼다. 없으면 문서 전체의 같은 문구를 모두 바꾼다.
+        사용자가 그림·인용·표 이름으로 특정 부분을 가리키면 반드시 lines로 그 부분만. "6", "4.0" 같은 짧은 문구는 lines 없으면 거부된다.
         checks = [{"text": 바꾸지 않고 확인만 할 문구, "note": 이유}] — 전년도 실적 등을 같은 호출에서 빨간 표시.
         날짜는 요일 포함 전체 문자열. 연도를 바꾼 날짜는 자동으로 빨간 '확인 필요' 표시.
         금액은 숫자만(예: "1,234,560", '원' 빼고). 계산식·표 합계·사업 예산 점검은 자동 — 결과 checks를 보고 함께 고친다.

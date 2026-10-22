@@ -149,3 +149,18 @@ def test_dropped_files_takes_real_paths_only():
                                     {"name": "b.png"}]}}  # 경로를 못 받은 항목은 뺀다
     assert dropped_files(e) == [{"path": r"C:\예시\a.hwp", "name": "a.hwp"}]
     assert dropped_files({}) == []
+
+
+def test_undo_last_restores_and_tells_ai_next_time(tmp_path, fake_bridge):
+    from hwpgpt.tools_server import Tools
+
+    fake_bridge.text = "참여시간\r\n6\r\n만족도\r\n4.0"
+    before = fake_bridge.text
+    out = Tools(fake_bridge, tmp_path / "s.jsonl").apply_edits(
+        [{"find": "6", "replace": "8", "lines": [2]}, {"find": "4.0", "replace": "5.0", "lines": [4]}])
+    a = bare_api(tmp_path, fake_bridge)
+    a._last, a._undone, a._thread_id = {"applied": out["applied"], "checks": ["8"]}, False, "t1"
+    assert a.undo_last() == {"restored": 2, "skipped": 0}
+    assert fake_bridge.text == before and fake_bridge.unmarked == ["8"] and a.undo_last()["error"]
+    assert a._with_undo_note("다시 해줘").startswith("[참고: 바로 앞 요청에서 고친 것은 사용자가 모두 되돌렸음]")
+    assert a._with_undo_note("또") == "또"  # 한 번만

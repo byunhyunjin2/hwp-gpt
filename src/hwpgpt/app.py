@@ -43,6 +43,8 @@ class Api:
         self._settings = _load_settings()   # 화면 테마, GPT 모델 (패널을 다시 켜도 유지)
         self._models = cr.list_models()
         self._update: dict = {}
+        self._last: dict | None = None  # 가장 최근 요청이 고친 것 (되돌리기용)
+        self._undone = False            # 되돌린 뒤 첫 요청에 AI에게 알림
         attachments.clear_pasted(paths.pasted_dir())
         self._limits = cr.read_rate_limits()
         self._progress = {"pct": 0, "step": "", "start": 0.0}
@@ -92,6 +94,7 @@ class Api:
             self._candidates = []
             self._bridge._marks.clear()  # 이전 문서의 형광펜은 그 문서에 그대로 둠
             self._bridge._cleared = {}
+            self._last = None  # 되돌리기는 같은 문서에서만
         self._target = target
 
     # --- 기억 학습 (Task 9) ---
@@ -234,7 +237,7 @@ class Api:
                 self._learn_now()  # 지난 요청 뒤 사용자가 직접 고친 것 먼저 확인
             self._progress = {"pct": 0, "step": "", "start": time.time()}
             images, attached, notes = attachments.prepare(files or [])
-            r = cr.run_turn(text, self._rules_for_prompt(), self._thread_id, on_progress=self._on_progress,
+            r = cr.run_turn(self._with_undo_note(text), self._rules_for_prompt(), self._thread_id, on_progress=self._on_progress,
                             model=self._settings.get("model") or None, images=images, attached=attached)
             r.checks += self._leftover_checks(r.applied, r.checks)
             r.checks = self._final_checks(r.checks)
@@ -250,11 +253,37 @@ class Api:
             self._limits = cr.read_rate_limits(r.thread_id) or self._limits
             self._bridge.remember_marks([a["replace"] for a in r.applied if a.get("count")])
             self._bridge.remember_marks([c["text"] for c in r.checks], RED)
+            done = [a for a in r.applied if a.get("count")]
+            self._last = {"applied": done, "checks": [c["text"] for c in r.checks]} if done else None
             return {"reply": r.reply, "changes": r.applied, "checks": r.checks,
                     "docType": self._doc_type, "error": r.error, "usage": r.usage,
-                    "candidates": self._pop_candidates(), "attachNotes": notes}
+                    "candidates": self._pop_candidates(), "attachNotes": notes, "canUndo": bool(done)}
         finally:
             self._busy.release()
+
+    def _with_undo_note(self, text: str) -> str:
+        """되돌린 뒤 같은 대화로 처음 보내는 요청: AI는 되돌린 걸 모르니 알려 준다."""
+        note = self._undone and self._thread_id
+        self._undone = False
+        return "[참고: 바로 앞 요청에서 고친 것은 사용자가 모두 되돌렸음]\n" + text if note else text
+
+    def undo_last(self) -> dict:
+        """[되돌리기]: 가장 최근 요청이 고친 자리를 원래 글로, 그 요청의 형광펜도 지운다."""
+        last = self._last
+        if not last:
+            return {"error": "되돌릴 수정이 없습니다"}
+        if not self._busy.acquire(blocking=False):
+            return {"error": "요청 처리가 끝난 뒤 되돌려 주세요"}
+        try:
+            restored, skipped = self._bridge.undo(last["applied"])
+            self._bridge.unmark(last["checks"])
+            self._snapshot = self._bridge.read_text()  # 되돌린 것을 '사용자가 직접 고친 것'으로 배우지 않게
+        except HwpNotAvailable:
+            return {"error": "한글 문서를 열어 주세요"}
+        finally:
+            self._busy.release()
+        self._last, self._undone = None, True
+        return {"restored": restored, "skipped": skipped}
 
     def new_conversation(self) -> None:
         self._thread_id = None

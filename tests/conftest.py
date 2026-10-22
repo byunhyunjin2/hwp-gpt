@@ -18,13 +18,30 @@ class FakeBridge:
         return self.text
 
     def apply(self, edits):
+        """e.nths가 있으면 그 번째 것만. 자리는 [0, 0, 글자 위치]로 흉내."""
+        import re
+
         out = []
         for e in edits:
-            n = self.text.count(e.find)
-            self.text = self.text.replace(e.find, e.replace)
+            idxs = [m.start() for m in re.finditer(re.escape(e.find), self.text)]
+            pick = [i for k, i in enumerate(idxs) if e.nths is None or k in e.nths]
+            for i in reversed(pick):
+                self.text = self.text[:i] + e.replace + self.text[i + len(e.find):]
             self.applied.append(e)
-            out.append((e, n))
+            out.append((e, len(pick), [[0, 0, i] for i in pick]))
         return out
+
+    def undo(self, applied):
+        ok = 0
+        for a in reversed(applied):
+            for _, _, i in reversed(a["pos"]):
+                if self.text[i:i + len(a["replace"])] == a["replace"]:
+                    self.text = self.text[:i] + a["find"] + self.text[i + len(a["replace"]):]
+                    ok += 1
+        return ok, 0
+
+    def unmark(self, texts):
+        self.unmarked = list(texts)
 
     def mark_check(self, text: str) -> bool:
         self.red.append(text)

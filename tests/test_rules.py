@@ -141,3 +141,14 @@ def test_table_sum_accepts_price_and_amount_columns():
     assert check_table_sums(doc) == []
     out = check_table_sums(doc.replace("94,000원", "75,000원"))  # 합계만 바꾸고 물품은 그대로인 경우
     assert "물품 금액(수량×단가)의 합 94,000원" in out[0].note
+
+
+def test_short_number_needs_location_and_line_context_avoids_false_id():
+    doc = "학번 202699001\r\n참여시간\r\n6\r\n만족도 4.0"
+    ok, checks = validate_edits(doc, [Edit("6", "8", "")])  # 위치 없는 "6"은 문서 곳곳(학번 등)이 바뀜
+    assert ok == [] and "줄 번호" in checks[0].note
+    ok, checks = validate_edits(doc, [Edit("6", "8", "", nths=(1,), context=("6",))])  # 표 칸 "6"만
+    assert len(ok) == 1 and checks == []
+    ok, checks = validate_edits(doc, [Edit("6", "8", "", nths=(), context=())])
+    assert ok == [] and "지정한 줄에 없음" in checks[0].note
+    assert len(validate_edits(doc, [Edit("만족도 4.0", "만족도 5.0", "")])[0]) == 1  # 긴 문구는 위치 없이도

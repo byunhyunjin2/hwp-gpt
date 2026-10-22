@@ -112,29 +112,76 @@ class HwpBridge:
         """지금 수정 대상인 문서 경로 (새 문서면 빈 문자열)."""
         return self._call(lambda h: h.Path)
 
-    def apply(self, edits: list[Edit]) -> list[tuple[Edit, int]]:
-        """각 수정안을 문서 전체에 적용하고 바꾼 곳을 노랑으로 표시. 실제 바꾼 수를 돌려준다."""
+    def apply(self, edits: list[Edit]) -> list[tuple[Edit, int, list]]:
+        """수정안을 적용하고 바꾼 곳을 노랑으로 표시. e.nths가 있으면 그 번째 것만, 없으면 문서 전체.
+        (수정안, 바꾼 수, 바꾼 자리들[(list, para, pos)]) — 자리는 되돌리기(undo)에 쓴다."""
 
         def do(h):
             out = []
             for e in edits:
                 limit = h.GetTextFile("UNICODE", "").count(e.find)
-                n = 0
+                want = None if e.nths is None else set(e.nths)
+                k, pos = 0, []
                 found = self._find(h, e.find, from_start=True)
-                while found and n < limit:
-                    self._insert(h, e.replace)  # 선택 영역을 바꿈
-                    for _ in range(len(e.replace)):
-                        h.HAction.Run("MoveSelLeft")
-                    self._markpen(h, YELLOW)
+                while found and k < limit:
+                    if want is None or k in want:
+                        self._insert(h, e.replace)  # 선택 영역을 바꿈
+                        for _ in range(len(e.replace)):
+                            h.HAction.Run("MoveSelLeft")
+                        pos.append(list(h.GetPos()))  # 바꾼 글자의 시작 자리
+                        self._markpen(h, YELLOW)
                     h.HAction.Run("Cancel")
-                    n += 1
+                    k += 1
                     found = self._find(h, e.find, from_start=False)
-                if n:
+                if pos:
                     self._marks[e.replace] = YELLOW
-                out.append((e, n))
+                out.append((e, len(pos), pos))
             return out
 
         return self._call(do)
+
+    def undo(self, applied: list[dict]) -> tuple[int, int]:
+        """apply가 바꾼 자리를 거꾸로(마지막 것부터) 원래 글로 되돌린다. 그사이 사용자가 고친 자리는 건너뛴다.
+        applied = [{"find", "replace", "pos": [[list, para, pos], ...]}]. (되돌린 수, 건너뛴 수)"""
+
+        def do(h):
+            ok = skipped = 0
+            for a in reversed(applied):
+                for lst, para, p in reversed(a.get("pos") or []):
+                    h.SetPos(lst, para, p)
+                    for _ in range(len(a["replace"])):
+                        h.HAction.Run("MoveSelRight")
+                    if h.GetTextFile("UNICODE", "saveblock").rstrip("\r\n") != a["replace"]:
+                        h.HAction.Run("Cancel")
+                        skipped += 1
+                        continue
+                    self._insert(h, a["find"])  # 선택 영역을 원래 글로 (MarkPenDelete는 선택을 풀어서 나중에)
+                    for _ in range(len(a["find"])):
+                        h.HAction.Run("MoveSelLeft")
+                    if a["find"]:
+                        h.HAction.Run("MarkPenDelete")  # 노랑을 이어받았으면 지움
+                    h.HAction.Run("Cancel")
+                    ok += 1
+                self._marks.pop(a["replace"], None)
+            return ok, skipped
+
+        return self._call(do)
+
+    def unmark(self, texts: list[str]) -> None:
+        """이 글자들에 칠한 형광펜을 지운다 (되돌릴 때 그 요청의 확인 표시 정리)."""
+
+        def do(h):
+            for text in dict.fromkeys(texts):
+                limit = h.GetTextFile("UNICODE", "").count(text)
+                k, found = 0, self._find(h, text, from_start=True)
+                while found and k < limit:
+                    h.HAction.Run("MarkPenDelete")
+                    h.HAction.Run("Cancel")
+                    k += 1
+                    found = self._find(h, text, from_start=False)
+                self._marks.pop(text, None)
+
+        self._call(do)
 
     def mark_check(self, text: str) -> bool:
         def do(h):

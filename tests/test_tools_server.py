@@ -22,14 +22,14 @@ def test_apply_ok_logged(fake_bridge, tmp_path):
 def test_read_document_is_compact_and_logs_doc_type(fake_bridge, tmp_path):
     fake_bridge.text = "제목\r\n\r\n   본문   첫 줄  \r\n\r\n\r\n둘째 줄"
     t = Tools(fake_bridge, tmp_path / "s.jsonl")
-    assert t.read_document("공문") == {"text": "제목\n본문 첫 줄\n둘째 줄"}
+    assert t.read_document("공문") == {"text": "1| 제목\n2| 본문 첫 줄\n3| 둘째 줄"}
     assert session.read(tmp_path / "s.jsonl") == [{"kind": "doc_type", "data": {"name": "공문"}}]
 
 
 def test_find_lines_returns_only_matching_lines(fake_bridge, tmp_path):
     fake_bridge.text = "2026학년도 계획\r\n추진 배경 문단\r\n기간: 2026. 10. 31.(토)\r\n학번 202699001"
     out = Tools(fake_bridge, tmp_path / "s.jsonl").find_lines(r"20\d\d", "계획서")
-    assert out["lines"] == ["2026학년도 계획", "기간: 2026. 10. 31.(토)", "학번 202699001"]
+    assert out["lines"] == ["1| 2026학년도 계획", "3| 기간: 2026. 10. 31.(토)", "4| 학번 202699001"]
     assert out["total_lines"] == 4
 
 
@@ -111,8 +111,31 @@ def test_amount_edit_retries_without_won(fake_bridge, tmp_path):
     fake_bridge.text = "합계\r\n1,234,560원"
     real_apply = fake_bridge.apply
     # 한글 표 칸처럼 '원'이 붙은 문구로는 못 찾는 상황
-    fake_bridge.apply = lambda edits: [(e, 0) if e.find.endswith("원") else real_apply([e])[0] for e in edits]
+    fake_bridge.apply = lambda edits: [(e, 0, []) if e.find.endswith("원") else real_apply([e])[0] for e in edits]
     out = Tools(fake_bridge, tmp_path / "s.jsonl").apply_edits(
         [{"find": "1,234,560원", "replace": "1,000,000원", "reason": ""}])
-    assert out["applied"][0] == {"find": "1,234,560", "replace": "1,000,000", "count": 1}
+    assert {k: out["applied"][0][k] for k in ("find", "replace", "count")} == {"find": "1,234,560", "replace": "1,000,000", "count": 1}
     assert "1,000,000원" in fake_bridge.text
+
+
+def test_lines_limit_edit_to_that_table_cell(fake_bridge, tmp_path):
+    # 본문의 "6시간"·학번은 그대로, 표의 참여시간 칸 "6"만 (사용자가 표 캡처를 붙여 요청한 경우)
+    fake_bridge.text = "참여시간 6시간 운영\r\n학번 202699061\r\n이수율\r\n참여시간\r\n100%\r\n6\r\n4.0"
+    t = Tools(fake_bridge, tmp_path / "s.jsonl")
+    lines = t.find_lines(r"^6$|^4\.0$")["lines"]
+    assert lines == ["6| 6", "7| 4.0"]
+    out = t.apply_edits([{"find": "6", "replace": "8", "lines": [6]}, {"find": "4.0", "replace": "5.0", "lines": [7]}])
+    assert [a["count"] for a in out["applied"]] == [1, 1] and out["checks"] == []
+    assert fake_bridge.text == "참여시간 6시간 운영\r\n학번 202699061\r\n이수율\r\n참여시간\r\n100%\r\n8\r\n5.0"
+
+
+def test_short_find_without_lines_is_refused(fake_bridge, tmp_path):
+    fake_bridge.text = "참여시간 6시간\r\n6"
+    out = Tools(fake_bridge, tmp_path / "s.jsonl").apply_edits([{"find": "6", "replace": "8"}])
+    assert out["applied"] == [] and "줄 번호" in out["checks"][0]["note"] and fake_bridge.text == "참여시간 6시간\r\n6"
+
+
+def test_find_lines_around_shows_table_headers(fake_bridge, tmp_path):
+    fake_bridge.text = "달성 목표값\r\n이수율\r\n참여시간\r\n100%\r\n6\r\n본문\r\n구분\r\n참여율\r\n6"
+    out = Tools(fake_bridge, tmp_path / "s.jsonl").find_lines(r"^6$", around=2)
+    assert out["lines"] == ["3| 참여시간", "4| 100%", "5| 6", "6| 본문", "7| 구분", "8| 참여율", "9| 6"]

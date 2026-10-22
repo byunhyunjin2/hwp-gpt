@@ -27,6 +27,17 @@ class Edit:
     find: str
     replace: str
     reason: str
+    nths: tuple[int, ...] | None = None  # 바꿀 것만: 문서에서 find의 몇 번째들(0부터). None = 전부
+    context: tuple[str, ...] = ()        # 그 위치들의 줄 (보호 검사는 이 줄들로만)
+
+
+VAGUE_RE = re.compile(r"[\d.,%\s]{1,6}")  # "6", "4.0", "100%" 같은 짧은 숫자
+
+
+def is_vague(find: str) -> bool:
+    """위치 없이 바꾸면 문서 곳곳이 같이 바뀔 짧은 문구."""
+    s = find.strip()
+    return len(s) <= 1 or bool(VAGUE_RE.fullmatch(s))
 
 
 @dataclass
@@ -111,11 +122,14 @@ def validate_edits(doc_text: str, edits: list[Edit]) -> tuple[list[Edit], list[C
     ok: list[Edit] = []
     checks: list[Check] = []
     for e in edits:
-        if not e.find or e.find not in doc_text:
-            checks.append(Check(e.find, "문서에서 찾지 못함"))
+        if not e.find or e.find not in doc_text or e.nths == ():
+            checks.append(Check(e.find, "문서에서 찾지 못함" + (" (지정한 줄에 없음)" if e.nths == () else "")))
+            continue
+        if e.nths is None and is_vague(e.find):
+            checks.append(Check(e.find, "짧은 문구라 문서 곳곳이 같이 바뀔 수 있어 바꾸지 않음 — 바꿀 줄 번호(lines)를 함께 주세요"))
             continue
         reason = next(
-            (r for p in _paragraphs_with(doc_text, e.find)
+            (r for p in (e.context or _paragraphs_with(doc_text, e.find))
              if (r := is_protected(e.find, p))),
             None,
         )
