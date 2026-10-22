@@ -76,6 +76,9 @@
   .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chip button { border: 0; background: transparent; padding: 0 4px; color: var(--muted); }
   .msg .files { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
+  body.dropping::after { content: "여기에 놓으면 첨부됩니다"; position: fixed; inset: 8px; border: 2px dashed var(--accent);
+    border-radius: 12px; background: color-mix(in srgb, var(--bg) 85%, transparent); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; font-weight: 700; pointer-events: none; }
   textarea { flex: 1; resize: none; height: 56px; padding: 8px; border-radius: 8px; border: 1px solid var(--line);
              background: var(--bg); color: var(--text); font: inherit; }
   button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
@@ -292,10 +295,19 @@ function renderChips() {
     return c;
   }));
 }
-async function pickFiles() {
-  for (const f of await api.pick_files()) if (!files.some((g) => g.path === f.path)) files.push(f);
+function addFiles(list) {
+  for (const f of list) if (!files.some((g) => g.path === f.path)) files.push(f);
   renderChips();
 }
+window.addFiles = addFiles;  // 끌어다 놓기: Python(app._wire_drop)이 실제 경로를 넘겨 부른다
+async function pickFiles() { addFiles(await api.pick_files()); }
+
+// 끌고 들어오는 동안 "여기에 놓으세요" 표시. 놓기 처리는 Python 쪽 (경로는 거기서만 알 수 있음)
+let dragDepth = 0;
+document.addEventListener("dragenter", (e) => { if (e.dataTransfer?.types.includes("Files")) document.body.classList.toggle("dropping", ++dragDepth > 0); });
+document.addEventListener("dragleave", () => { document.body.classList.toggle("dropping", --dragDepth > 0); });
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", () => { dragDepth = 0; document.body.classList.remove("dropping"); });
 
 async function send() {
   const text = $("input").value.trim();

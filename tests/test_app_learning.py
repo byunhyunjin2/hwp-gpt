@@ -140,3 +140,12 @@ def test_final_checks_drop_stale_and_recheck_budget(tmp_path, fake_bridge):
     ])
     assert [c["text"] for c in out] == ["2026년 9월 1일", "1,500,000"]
     assert out[0]["note"] == "신청일 확인"
+
+
+def test_dropped_files_takes_real_paths_only():
+    from hwpgpt.app import dropped_files
+
+    e = {"dataTransfer": {"files": [{"name": "a.hwp", "pywebviewFullPath": r"C:\예시\a.hwp"},
+                                    {"name": "b.png"}]}}  # 경로를 못 받은 항목은 뺀다
+    assert dropped_files(e) == [{"path": r"C:\예시\a.hwp", "name": "a.hwp"}]
+    assert dropped_files({}) == []

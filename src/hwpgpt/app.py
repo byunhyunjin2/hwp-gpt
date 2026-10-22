@@ -344,6 +344,26 @@ def _dock_loop(api: Api, stop: threading.Event) -> None:
     docker.detach()
 
 
+def dropped_files(event: dict) -> list[dict]:
+    """패널에 끌어다 놓은 파일들 (경로·이름). 실제 경로는 pywebview가 Python 쪽 drop 처리기에만 넣어 준다."""
+    out = []
+    for f in (event.get("dataTransfer") or {}).get("files", []):
+        if p := f.get("pywebviewFullPath"):
+            out.append({"path": p, "name": Path(p).name})
+    return out
+
+
+def _wire_drop(window) -> None:
+    """패널 어디에 파일을 놓아도 첨부 목록에 넣는다 (📎과 같은 곳으로)."""
+    from webview.dom import DOMEventHandler
+
+    def on_drop(e):
+        if files := dropped_files(e):
+            window.evaluate_js(f"window.addFiles({json.dumps(files, ensure_ascii=False)})")
+
+    window.dom.document.events.drop += DOMEventHandler(on_drop, prevent_default=True, stop_propagation=True)
+
+
 def main() -> None:
     import webview
 
@@ -351,6 +371,7 @@ def main() -> None:
     stop = threading.Event()
     api._window = webview.create_window(TITLE, url=str(UI), js_api=api, width=380, height=900,
                                        min_size=(320, 400))
+    api._window.events.loaded += lambda: _wire_drop(api._window)
     t = threading.Thread(target=_dock_loop, args=(api, stop), daemon=True)
     t.start()
     webview.start(gui="edgechromium", icon=str(ICON))
