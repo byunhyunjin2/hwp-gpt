@@ -43,6 +43,7 @@ class Api:
         self._settings = _load_settings()   # 화면 테마, GPT 모델 (패널을 다시 켜도 유지)
         self._models = cr.list_models()
         self._update: dict = {}
+        attachments.clear_pasted(paths.pasted_dir())
         self._limits = cr.read_rate_limits()
         self._progress = {"pct": 0, "step": "", "start": 0.0}
 
@@ -203,6 +204,14 @@ class Api:
             self._bridge.mark_check(c["text"])
         alive = [c for c in checks if not c["note"].startswith(AMOUNT_NOTES) and resolve_text(c["text"], doc) in doc]
         return list({(c["text"], c.get("nth", 0)): c for c in alive + budget}.values())
+
+    def save_pasted_image(self, data_url: str) -> dict:
+        """스크린샷 붙여넣기(Ctrl+V): 화면이 준 그림을 파일로 저장해 첨부 목록에."""
+        return attachments.save_pasted(data_url, paths.pasted_dir(), time.strftime("%H%M%S"))
+
+    def clipboard_files(self) -> list[dict]:
+        """탐색기에서 복사한 파일 붙여넣기: 클립보드의 실제 경로."""
+        return [{"path": p, "name": Path(p).name} for p in attachments.clipboard_paths()]
 
     def pick_files(self) -> list[dict]:
         """[📎] 버튼: 파일 고르기 창. 고른 파일의 경로·이름 (보낼 때 send에 경로를 다시 넘긴다)."""

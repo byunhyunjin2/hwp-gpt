@@ -56,3 +56,16 @@ def test_prepare_splits_images_docs_and_reports_problems(tmp_path):
     assert images == [str(img)]
     assert block.startswith("[첨부 파일: 메모.txt]\n") and len(block) < at.LIMIT + 40
     assert any("앞부분" in n for n in notes) and any("x.zip" in n for n in notes)
+
+
+def test_pasted_screenshot_saved_as_file(tmp_path):
+    import base64
+
+    url = "data:image/png;base64," + base64.b64encode(b"\x89PNG fake").decode()
+    a = at.save_pasted(url, tmp_path, "183000")
+    b = at.save_pasted(url, tmp_path, "183000")  # 같은 초에 두 장
+    assert a["name"] == "붙여넣은 그림 183000.png" and b["name"] == "붙여넣은 그림 183000-2.png"
+    assert (tmp_path / a["name"]).read_bytes() == b"\x89PNG fake"
+    assert "error" in at.save_pasted("data:text/plain;base64,aGk=", tmp_path, "1")
+    at.clear_pasted(tmp_path)
+    assert list(tmp_path.iterdir()) == []

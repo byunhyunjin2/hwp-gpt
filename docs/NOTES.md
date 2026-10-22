@@ -68,6 +68,7 @@
 - 아이콘: `src/hwpgpt/assets/hwpgpt.ico` ← `packaging/make_icon.py` (Pillow, 개발 PC에서만). pywebview(WinForms)는 `webview.start(icon=)`가 없으면 실행 파일의 아이콘을 창에 씀
 - 첨부: 그림은 Codex `--image`(exec·resume 둘 다 지원, 0.163.0 확인), 문서는 글만 뽑아 프롬프트에 (`attachments.py`, 파일당 15,000자). hwp는 `olefile`, 나머지는 표준 라이브러리. 첨부도 OpenAI로 전송됨을 README에 안내
 - 끌어다 놓기 파일 경로: pywebview(EdgeChromium)는 Python으로 등록한 drop 처리기(`window.dom.document.events.drop`)가 있을 때만 `pywebviewFullPath`를 채움. JS만으로는 경로를 알 수 없음
+- 붙여넣기: 화면(JS)은 클립보드 그림을 data URL로만 받음 → `save_pasted_image`가 파일로 저장. 탐색기 복사 파일은 JS로 경로를 알 수 없어 `win32clipboard`의 CF_HDROP으로 읽음
 - PowerShell 5에 한글 인자를 넘기면 깨짐 → 릴리스 노트는 `release.py`가 UTF-8로 직접 씀
 - 커밋 이메일은 GitHub noreply
 

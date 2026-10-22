@@ -302,6 +302,23 @@ function addFiles(list) {
 window.addFiles = addFiles;  // 끌어다 놓기: Python(app._wire_drop)이 실제 경로를 넘겨 부른다
 async function pickFiles() { addFiles(await api.pick_files()); }
 
+// 붙여넣기(Ctrl+V): 탐색기에서 복사한 파일은 실제 경로로, 스크린샷 같은 그림은 파일로 저장해 첨부. 글은 그대로 입력
+function readDataUrl(file) {
+  return new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = fail; r.readAsDataURL(file); });
+}
+document.addEventListener("paste", async (e) => {
+  const cd = e.clipboardData;
+  if (!cd || ![...cd.types].includes("Files")) return;  // 글 붙여넣기는 기본 동작
+  e.preventDefault();
+  if (busy) return;
+  const real = await api.clipboard_files();
+  if (real.length) { addFiles(real); return; }
+  for (const it of [...cd.items].filter((i) => i.kind === "file" && i.type.startsWith("image/"))) {
+    const r = await api.save_pasted_image(await readDataUrl(it.getAsFile()));
+    if (r.error) say("err", r.error); else addFiles([r]);
+  }
+});
+
 // 끌고 들어오는 동안 "여기에 놓으세요" 표시. 놓기 처리는 Python 쪽 (경로는 거기서만 알 수 있음)
 let dragDepth = 0;
 document.addEventListener("dragenter", (e) => { if (e.dataTransfer?.types.includes("Files")) document.body.classList.toggle("dropping", ++dragDepth > 0); });

@@ -138,3 +138,52 @@ def prepare(paths: list[str]) -> tuple[list[str], str, list[str]]:
             text = text[:LIMIT]
         blocks.append(f"[첨부 파일: {p.name}]\n{text}")
     return images, "\n\n".join(blocks), notes
+
+
+PASTE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp", "image/bmp": ".bmp"}
+PASTE_MAX = 20 * 1024 * 1024
+
+
+def save_pasted(data_url: str, folder: Path, stamp: str) -> dict:
+    """붙여넣은 그림(화면이 준 data URL)을 파일로 저장 → 첨부 목록 항목 {path, name}. 그림이 아니면 error."""
+    import base64
+
+    head, _, b64 = data_url.partition(",")
+    ext = PASTE_TYPES.get(head.removeprefix("data:").split(";")[0])
+    if not ext or ";base64" not in head:
+        return {"error": "붙여넣은 내용이 그림이 아닙니다"}
+    raw = base64.b64decode(b64)
+    if len(raw) > PASTE_MAX:
+        return {"error": "붙여넣은 그림이 너무 큽니다 (20MB까지)"}
+    name, n = f"붙여넣은 그림 {stamp}{ext}", 1
+    while (folder / name).exists():  # 같은 초에 여러 장
+        n += 1
+        name = f"붙여넣은 그림 {stamp}-{n}{ext}"
+    (folder / name).write_bytes(raw)
+    return {"path": str(folder / name), "name": name}
+
+
+def clear_pasted(folder: Path) -> None:
+    """지난번에 붙여넣은 그림 파일 정리 (이미 보냈거나 안 쓴 것)."""
+    for p in folder.glob("*"):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
+def clipboard_paths() -> list[str]:
+    """탐색기에서 복사(Ctrl+C)한 파일들의 실제 경로. 없으면 빈 목록."""
+    import win32clipboard
+    import win32con
+
+    try:
+        win32clipboard.OpenClipboard(None)
+    except Exception:  # 다른 프로그램이 클립보드를 쓰는 중
+        return []
+    try:
+        if win32clipboard.IsClipboardFormatAvailable(win32con.CF_HDROP):
+            return list(win32clipboard.GetClipboardData(win32con.CF_HDROP))
+        return []
+    finally:
+        win32clipboard.CloseClipboard()

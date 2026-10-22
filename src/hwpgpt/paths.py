@@ -29,3 +29,8 @@ def work_dir() -> Path:
 
 def session_dir() -> Path:
     return _sub("sessions")
+
+
+def pasted_dir() -> Path:
+    """붙여넣은 스크린샷을 첨부용 파일로 두는 곳 (패널을 켤 때 비움)."""
+    return _sub("pasted")
