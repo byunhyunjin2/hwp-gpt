@@ -64,6 +64,8 @@
 - 업데이트 확인은 `https://github.com/byunhyunjin2/hwp-gpt/releases/latest/download/latest.json` (API 아님, 시간당 60회 제한 회피). 설치 파일 SHA256을 `latest.json`과 대조. 조용히 설치(`/VERYSILENT`) 후 `[Run]`으로 패널 재실행
 - 패널 안 업데이트 실제 확인 (2026-10-22): 1.0.0 → [업데이트] → 1.0.1 설치·재실행. 받은 설치 파일은 다음 실행 때 `updater.cleanup`이 지움
 - Codex 동봉 파일: 본체 + `codex-code-mode-host.exe`(필수, MCP 도구 호출) + `codex-resources\*.exe` + `codex-path\rg.exe` + `codex-package.json`. `voice` 폴더·최상위 중복 사본은 불필요 (2026-10-22 시험)
+- **배포는 시험 → 사용자 승인 → `release.py publish`** (사용자 결정 2026-10-22). 오류신고 버튼은 만들지 않음 (사용자 결정)
+- 아이콘: `src/hwpgpt/assets/hwpgpt.ico` ← `packaging/make_icon.py` (Pillow, 개발 PC에서만). pywebview(WinForms)는 `webview.start(icon=)`가 없으면 실행 파일의 아이콘을 창에 씀
 - PowerShell 5에 한글 인자를 넘기면 깨짐 → 릴리스 노트는 `release.py`가 UTF-8로 직접 씀
 - 커밋 이메일은 GitHub noreply
 

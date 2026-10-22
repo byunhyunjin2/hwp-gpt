@@ -10,6 +10,11 @@
 - 실수했거나 되돌린 일 → `docs/MISTAKES.md`에 M-번호로 추가
 - 기록 갱신까지 한 커밋에 포함
 
+## 배포 (공개 레포 — 다른 PC가 자동으로 업데이트 알림을 받음)
+- **시험 → 사용자 승인 → 배포.** 승인 없이 `release.py publish`·푸시·GitHub 릴리스 하지 않는다
+- `python packaging/release.py build --notes notes.md --codex <Codex 폴더>` → 이 PC에서 설치·실행 확인 → 무엇을 시험했는지 보고하고 승인 요청 → 승인 후 `python packaging/release.py publish`
+- 시험에서 문제가 나오면 `git checkout -- .`로 build가 바꾼 버전·README·CHANGELOG를 되돌리고 고친 뒤 다시 build
+
 ## 지켜야 할 것
 - 실제 업무 문서(.hwp/.hwpx, 학생 이름·학번 포함) 커밋 금지. 테스트 문서는 코드로 생성
 - **실제 개인정보(이름·학번·연락처 등)는 테스트·예시·문서·커밋 메시지·외부 AI 시험 입력 어디에도 쓰지 않는다.** 가짜 값만(홍길동 / 202699001 / 010-0000-0000). 커밋 전 확인 (MISTAKES M-005)

@@ -49,13 +49,15 @@ python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt pyinstalle
 python run.pyw                              # 패널 실행 (Codex: spike\bin 또는 HWPGPT_CODEX)
 ```
 
-**배포** (Inno Setup 6 필요): 변경 목록을 `notes.md`에 짧게 쓰고
+**배포** (Inno Setup 6 필요) — 시험하고 승인받은 뒤에만 공개합니다. 변경 목록을 `notes.md`에 짧게 쓰고
 
 ```powershell
-.\.venv\Scripts\python packaging\release.py --notes notes.md --codex <공식 Codex 폴더>
+.\.venv\Scripts\python packaging\release.py build --notes notes.md --codex <공식 Codex 폴더>   # 버전 올리기·테스트·설치 파일
+# 이 PC에서 설치·실행해 확인 → 승인
+.\.venv\Scripts\python packaging\release.py publish                                           # 태그·GitHub 릴리스
 ```
 
-버전을 올리고(자리마다 0~9: 1.0.9 다음 1.1.0) 테스트 → 설치 파일 → README·CHANGELOG 갱신 → 태그 → GitHub 릴리스까지 한 번에 합니다. 설치된 패널은 릴리스의 `latest.json`을 보고 업데이트를 알립니다.
+버전은 자리마다 0~9 (1.0.9 다음 1.1.0). 설치된 패널은 릴리스의 `latest.json`을 보고 업데이트를 알립니다.
 
 ## 문서
 

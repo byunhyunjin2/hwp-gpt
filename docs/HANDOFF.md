@@ -12,8 +12,10 @@
 ## 배포 (새 버전 낼 때)
 1. 바뀐 것을 커밋 (CHANGELOG·NOTES·MISTAKES 포함)
 2. 사용자에게 보일 짧은 변경 목록을 `notes.md`(레포 밖 임시 파일)에 쓰기
-3. `python packaging\release.py --notes notes.md --codex C:\Users\user\claudework\HWP_GPT\spike\bin --python C:\Users\user\claudework\HWP_GPT\.venv\Scripts\python.exe`
-   - 버전 자동 증가(1.0.9 → 1.1.0), 테스트, 설치 파일, latest.json, README·CHANGELOG, 태그·푸시, GitHub 릴리스
+3. `python packaging\release.py build --notes notes.md --codex C:\Users\user\claudework\HWP_GPT\spike\bin --python C:\Users\user\claudework\HWP_GPT\.venv\Scripts\python.exe`
+   - 버전 자동 증가(1.0.9 → 1.1.0), 테스트, README·CHANGELOG, 설치 파일, latest.json (커밋·푸시 안 함)
+   - 설치 파일을 탐색기로 실행해 이 PC에서 설치·실행 확인 → **사용자에게 보고하고 승인받기** (승인 없이 배포 금지)
+   - 승인 후 `python packaging\release.py publish` → 커밋·태그·푸시·GitHub 릴리스
 4. **공개 레포라 푸시 전 개인정보 검사 필수** (실제 문서의 이름·학번·금액·문장 — M-005, M-008, M-009)
 
 ## 실행

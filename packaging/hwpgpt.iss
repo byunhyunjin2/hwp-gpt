@@ -23,6 +23,7 @@ CloseApplications=force
 RestartApplications=no
 UninstallDisplayName=HWP_GPT
 UninstallDisplayIcon={app}\HWP_GPT.exe
+SetupIconFile=..\src\hwpgpt\assets\hwpgpt.ico
 WizardStyle=modern
 
 [Languages]

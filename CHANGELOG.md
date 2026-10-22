@@ -2,6 +2,12 @@
 
 새 항목은 위에 추가. 형식: `## 날짜 — 제목` + 무엇이 왜 바뀌었는지.
 
+## 2026-10-22 — 병아리 아이콘, 배포는 승인 후
+
+- **앱 아이콘**: '문서 위 병아리'(사용자가 후보 4개 중 선택). 프로그램 파일·바탕화면·시작 메뉴 바로가기·작업 표시줄·창 제목줄·설치 파일·Windows 앱 목록에 같은 그림. `packaging/make_icon.py`(Pillow)로 `src/hwpgpt/assets/hwpgpt.ico`(16~256px) 생성, PyInstaller `icon=`, Inno `SetupIconFile`, 개발판 창은 `webview.start(icon=)`
+- **배포 규칙 (사용자 결정)**: 시험 → 승인 → 배포. `release.py`를 `build`(버전·테스트·설치 파일, 배포 안 함)와 `publish`(승인 후 태그·릴리스)로 나눔. AGENTS.md·README·HANDOFF에 반영
+- 오류신고 버튼은 만들지 않기로 함 (사용자 결정)
+
 ## 2026-10-22 — v1.0.2 배포
 
 - 업데이트 뒤 임시 폴더에 남던 설치 파일(약 110MB)을 자동으로 지웁니다

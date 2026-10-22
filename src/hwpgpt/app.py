@@ -16,6 +16,7 @@ from .rules import AMOUNT_NOTES, amount_checks, changed_years, leftover_years, r
 
 TITLE = "HWP_GPT"
 UI = Path(__file__).resolve().parent / "ui" / "index.html"
+ICON = Path(__file__).resolve().parent / "assets" / "hwpgpt.ico"  # 창 제목줄 (개발판도 병아리)
 
 
 class Api:
@@ -343,7 +344,7 @@ def main() -> None:
                                        min_size=(320, 400))
     t = threading.Thread(target=_dock_loop, args=(api, stop), daemon=True)
     t.start()
-    webview.start(gui="edgechromium")
+    webview.start(gui="edgechromium", icon=str(ICON))
     stop.set()
     t.join(3)  # 패널을 닫으면 한글 창 크기 원래대로
     api._worker.stop()
