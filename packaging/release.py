@@ -67,6 +67,7 @@ def publish(a) -> None:
     run("git", "add", "-A")
     run("git", "commit", "-m", f"release: v{new}")
     run("git", "tag", f"v{new}")
+    run("git", "pull", "--no-rebase", "--no-edit", "origin", "main")  # GitHub에서 고친 것(README 등)을 먼저 합침
     run("git", "push", "origin", "HEAD", f"v{new}")
     run("gh", "release", "create", f"v{new}", str(setup), str(ROOT / "dist" / "latest.json"), "-R", REPO,
         "--title", f"HWP_GPT v{new}", "--notes-file", str(notes))

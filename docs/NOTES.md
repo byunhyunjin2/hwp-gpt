@@ -67,6 +67,7 @@
 - 설치: Inno Setup 6 (`winget install JRSoftware.InnoSetup`, 사용자 범위 설치), `packaging/hwpgpt.iss`. `lzma2/ultra64`는 ISCC 메모리 부족 → `LZMAUseSeparateProcess=yes`
 - 설치 위치 `%LOCALAPPDATA%\HWP_GPT\app`, AppId 고정(업데이트는 같은 AppId로 덮어쓰기). 업데이트 때 `_internal`·`codex` 폴더는 지우고 새로 (예전 파일 섞임 방지)
 - 업데이트 확인은 `https://github.com/byunhyunjin2/hwp-gpt/releases/latest/download/latest.json` (API 아님, 시간당 60회 제한 회피). 설치 파일 SHA256을 `latest.json`과 대조. 조용히 설치(`/VERYSILENT`) 후 `[Run]`으로 패널 재실행
+- GitHub CDN은 `releases/latest/download/latest.json` 이동을 몇 분 캐시 → 확인할 때 `?t=` 붙임. 사용자가 GitHub 웹에서 README를 고칠 수 있음 → 배포 전 pull
 - 패널 안 업데이트 실제 확인 (2026-10-22): 1.0.0 → [업데이트] → 1.0.1 설치·재실행. 받은 설치 파일은 다음 실행 때 `updater.cleanup`이 지움
 - Codex 동봉 파일: 본체 + `codex-code-mode-host.exe`(필수, MCP 도구 호출) + `codex-resources\*.exe` + `codex-path\rg.exe` + `codex-package.json`. `voice` 폴더·최상위 중복 사본은 불필요 (2026-10-22 시험)
 - **배포는 시험 → 사용자 승인 → `release.py publish`** (사용자 결정 2026-10-22). 오류신고 버튼은 만들지 않음 (사용자 결정)

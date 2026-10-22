@@ -7,6 +7,7 @@ import hashlib
 import json
 import subprocess
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 from typing import Callable
@@ -54,8 +55,8 @@ def check(current: str = __version__, timeout: float = 5) -> dict:
     """{"current", "latest", "notes", "available"}. 인터넷이 안 되면 available=False, error에 이유.
     패널을 켤 때마다 불리므로, 업데이트 뒤 남은 설치 파일도 여기서 지운다."""
     cleanup()
-    try:
-        info = json.loads(_get(LATEST, timeout))
+    try:  # ?t=: GitHub CDN이 'latest' 이동을 몇 분씩 캐시해 새 릴리스가 늦게 보이는 것 방지 (2026-10-22 확인)
+        info = json.loads(_get(f"{LATEST}?t={int(time.time())}", timeout))
     except Exception as e:  # 오프라인·차단·릴리스 없음: 패널은 그대로 쓰게
         return {"current": current, "available": False, "error": str(e)}
     return {"current": current, "latest": info["version"], "notes": info.get("notes", ""),
