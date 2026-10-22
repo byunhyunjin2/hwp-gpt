@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from . import codex_runner as cr
@@ -12,7 +13,7 @@ from .com_worker import ComWorker
 from .dock import Docker, EmbedDocker, find_hwp_window
 from .hwp_bridge import RED, HwpBridge, HwpNotAvailable
 from .memory import MemoryStore
-from .rules import AMOUNT_NOTES, amount_checks, changed_years, leftover_years, resolve_text
+from .rules import AMOUNT_NOTES, amount_checks, changed_years, leftover_years, resolve_text, touches_amount
 
 TITLE = "HWP_GPT"
 UI = Path(__file__).resolve().parent / "ui" / "index.html"
@@ -43,8 +44,8 @@ class Api:
         self._settings = _load_settings()   # 화면 테마, GPT 모델 (패널을 다시 켜도 유지)
         self._models = cr.list_models()
         self._update: dict = {}
-        self._last: dict | None = None  # 가장 최근 요청이 고친 것 (되돌리기용)
-        self._undone = False            # 되돌린 뒤 첫 요청에 AI에게 알림
+        self._log: dict[str, dict] = {}  # 항목별 되돌리기: 번호 → 바꾼 기록(자리 포함)
+        self._undone: list[str] = []      # 되돌린 수정 — 다음 요청에 AI에게 알림
         attachments.clear_pasted(paths.pasted_dir())
         self._limits = cr.read_rate_limits()
         self._progress = {"pct": 0, "step": "", "start": 0.0}
@@ -94,7 +95,7 @@ class Api:
             self._candidates = []
             self._bridge._marks.clear()  # 이전 문서의 형광펜은 그 문서에 그대로 둠
             self._bridge._cleared = {}
-            self._last = None  # 되돌리기는 같은 문서에서만
+            self._log = {}  # 되돌리기는 같은 문서에서만
         self._target = target
 
     # --- 기억 학습 (Task 9) ---
@@ -195,14 +196,14 @@ class Api:
             return []
         return [{"text": c["text"], "nth": c["nth"], "note": c["note"]} for c in left]
 
-    def _final_checks(self, checks: list[dict]) -> list[dict]:
-        """요청이 끝난 문서 기준으로 확인 목록 정리: 그사이 바뀌어 없어진 문구는 빼고, 금액 점검은 최종 문서로 다시,
+    def _final_checks(self, checks: list[dict], recheck_amounts: bool = True) -> list[dict]:
+        """요청이 끝난 문서 기준으로 확인 목록 정리: 그사이 바뀌어 없어진 문구는 빼고, 금액 점검은 (금액을 바꿨을 때만) 최종 문서로 다시,
         같은 곳은 한 번만(마지막 설명)."""
         try:
             doc = self._bridge.read_text()
         except HwpNotAvailable:
             return checks
-        budget = [{"text": c.text, "note": c.note} for c in amount_checks(doc)]
+        budget = [{"text": c.text, "note": c.note} for c in amount_checks(doc)] if recheck_amounts else []
         for c in budget:
             self._bridge.mark_check(c["text"])
         alive = [c for c in checks if not c["note"].startswith(AMOUNT_NOTES) and resolve_text(c["text"], doc) in doc]
@@ -239,8 +240,10 @@ class Api:
             images, attached, notes = attachments.prepare(files or [])
             r = cr.run_turn(self._with_undo_note(text), self._rules_for_prompt(), self._thread_id, on_progress=self._on_progress,
                             model=self._settings.get("model") or None, images=images, attached=attached)
-            r.checks += self._leftover_checks(r.applied, r.checks)
-            r.checks = self._final_checks(r.checks)
+            pairs = [(a["find"], a["replace"]) for a in r.applied if a.get("count")]
+            if not images:  # 그림을 첨부한 요청은 그 부분만 — 문서 전체 점검(옛 연도·금액)을 하지 않음
+                r.checks += self._leftover_checks(r.applied, r.checks)
+            r.checks = self._final_checks(r.checks, recheck_amounts=not images and touches_amount(pairs))
             try:
                 self._snapshot = self._bridge.read_text()
             except HwpNotAvailable:
@@ -253,36 +256,40 @@ class Api:
             self._limits = cr.read_rate_limits(r.thread_id) or self._limits
             self._bridge.remember_marks([a["replace"] for a in r.applied if a.get("count")])
             self._bridge.remember_marks([c["text"] for c in r.checks], RED)
-            done = [a for a in r.applied if a.get("count")]
-            self._last = {"applied": done, "checks": [c["text"] for c in r.checks]} if done else None
+            for a in r.applied:  # 항목마다 [↶] 되돌리기용 번호
+                if a.get("count"):
+                    a["id"] = uuid.uuid4().hex[:8]
+                    self._log[a["id"]] = a
             return {"reply": r.reply, "changes": r.applied, "checks": r.checks,
                     "docType": self._doc_type, "error": r.error, "usage": r.usage,
-                    "candidates": self._pop_candidates(), "attachNotes": notes, "canUndo": bool(done)}
+                    "candidates": self._pop_candidates(), "attachNotes": notes}
         finally:
             self._busy.release()
 
     def _with_undo_note(self, text: str) -> str:
         """되돌린 뒤 같은 대화로 처음 보내는 요청: AI는 되돌린 걸 모르니 알려 준다."""
-        note = self._undone and self._thread_id
-        self._undone = False
-        return "[참고: 바로 앞 요청에서 고친 것은 사용자가 모두 되돌렸음]\n" + text if note else text
+        notes, self._undone = self._undone, []
+        if not (notes and self._thread_id):
+            return text
+        return f"[참고: 사용자가 이 수정은 되돌림(원래 글로 돌아감): {', '.join(notes)}]\n" + text
 
-    def undo_last(self) -> dict:
-        """[되돌리기]: 가장 최근 요청이 고친 자리를 원래 글로, 그 요청의 형광펜도 지운다."""
-        last = self._last
-        if not last:
-            return {"error": "되돌릴 수정이 없습니다"}
+    def undo_item(self, item_id: str) -> dict:
+        """항목 옆 [↶]: 그 수정(같은 요청에서 바꾼 모든 자리)을 원래 글로. 그사이 사용자가 고친 자리는 건드리지 않는다."""
+        rec = self._log.get(item_id)
+        if not rec:
+            return {"error": "되돌릴 수 없는 항목입니다 (다른 문서이거나 이미 되돌림)"}
         if not self._busy.acquire(blocking=False):
             return {"error": "요청 처리가 끝난 뒤 되돌려 주세요"}
         try:
-            restored, skipped = self._bridge.undo(last["applied"])
-            self._bridge.unmark(last["checks"])
+            restored, skipped = self._bridge.undo([rec])
             self._snapshot = self._bridge.read_text()  # 되돌린 것을 '사용자가 직접 고친 것'으로 배우지 않게
         except HwpNotAvailable:
             return {"error": "한글 문서를 열어 주세요"}
         finally:
             self._busy.release()
-        self._last, self._undone = None, True
+        del self._log[item_id]
+        if restored:
+            self._undone.append(f"{rec['find']} → {rec['replace']}")
         return {"restored": restored, "skipped": skipped}
 
     def new_conversation(self) -> None:

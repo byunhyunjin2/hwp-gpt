@@ -214,10 +214,12 @@ def progress_of(e: dict) -> tuple[int, str] | None:
     return None
 
 
-def compose_prompt(user_text: str, memory_rules: list[str], attached: str = "") -> str:
-    if not memory_rules and not attached:
+def compose_prompt(user_text: str, memory_rules: list[str], attached: str = "", scoped: bool = False) -> str:
+    if not memory_rules and not attached and not scoped:
         return user_text
     parts = []
+    if scoped:  # 그림 첨부 = 고칠 범위 (사용자 결정 2026-10-22). 도구 서버도 위치 없는 수정을 거부한다
+        parts.append("[범위] 첨부한 그림에 보이는 부분만 고친다. 문서의 다른 곳은 같은 글이 있어도 바꾸지 않는다. 수정마다 그 부분의 줄 번호(lines)를 준다.")
     if memory_rules:
         parts.append("[이 사용자가 이 문서 종류에서 지켜 온 규칙]\n" + "\n".join(f"- {r}" for r in memory_rules))
     if attached:  # 참고 자료일 뿐, 고칠 대상은 열린 한글 문서
@@ -264,8 +266,9 @@ def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = No
         return TurnResult("", [], [], None, {}, "missing")
     sess = paths.session_dir() / f"{uuid.uuid4().hex}.jsonl"
     server_cmd, server_env = tools_server_cmd()
-    cmd = build_command(codex, compose_prompt(user_text, memory_rules, attached), server_cmd,
-                        {**server_env, "HWPGPT_SESSION": str(sess)}, thread_id, model, images)
+    scoped = {"HWPGPT_SCOPED": "1"} if images else {}
+    cmd = build_command(codex, compose_prompt(user_text, memory_rules, attached, bool(images)), server_cmd,
+                        {**server_env, "HWPGPT_SESSION": str(sess), **scoped}, thread_id, model, images)
     def on_event(e: dict) -> None:
         if pr := progress_of(e):
             on_progress(*pr)

@@ -139,3 +139,20 @@ def test_find_lines_around_shows_table_headers(fake_bridge, tmp_path):
     fake_bridge.text = "달성 목표값\r\n이수율\r\n참여시간\r\n100%\r\n6\r\n본문\r\n구분\r\n참여율\r\n6"
     out = Tools(fake_bridge, tmp_path / "s.jsonl").find_lines(r"^6$", around=2)
     assert out["lines"] == ["3| 참여시간", "4| 100%", "5| 6", "6| 본문", "7| 구분", "8| 참여율", "9| 6"]
+
+
+def test_image_request_only_edits_given_lines_and_skips_doc_wide_checks(fake_bridge, tmp_path):
+    fake_bridge.text = "사업 예산 1,000,000원\r\n합계 9,999,999원\r\n참여시간 6시간\r\n참여시간\r\n6"
+    t = Tools(fake_bridge, tmp_path / "s.jsonl", scoped=True)
+    out = t.apply_edits([{"find": "참여시간 6시간", "replace": "참여시간 8시간"},  # 위치 없음 → 거부
+                         {"find": "6", "replace": "8", "lines": [5]}])
+    assert [a["find"] for a in out["applied"]] == ["6"]
+    assert len(out["checks"]) == 1 and "그림 부분만" in out["checks"][0]["note"]  # 합계 불일치는 안 뜸
+    assert fake_bridge.text.endswith("참여시간 6시간\r\n참여시간\r\n8")
+
+
+def test_amount_checks_only_when_amounts_change(fake_bridge, tmp_path):
+    fake_bridge.text = "사업 예산 1,000,000원\r\n합계 9,999,999원\r\n2026학년도"
+    out = Tools(fake_bridge, tmp_path / "s.jsonl").apply_edits(
+        [{"find": "2026학년도", "replace": "2027학년도", "reason": "연도"}])
+    assert out["checks"] == []  # 금액을 안 건드린 요청에 예산 불일치를 띄우지 않음

@@ -117,13 +117,16 @@ def _paragraphs_with(doc_text: str, needle: str) -> list[str]:
     return hits or ([doc_text] if needle in doc_text else [])
 
 
-def validate_edits(doc_text: str, edits: list[Edit]) -> tuple[list[Edit], list[Check]]:
-    """통과한 수정안과, 거부되어 확인(빨강)으로 돌릴 항목."""
+def validate_edits(doc_text: str, edits: list[Edit], need_lines: bool = False) -> tuple[list[Edit], list[Check]]:
+    """통과한 수정안과, 거부되어 확인(빨강)으로 돌릴 항목. need_lines: 그림을 첨부한 요청 — 위치 없는 수정은 모두 거부."""
     ok: list[Edit] = []
     checks: list[Check] = []
     for e in edits:
         if not e.find or e.find not in doc_text or e.nths == ():
             checks.append(Check(e.find, "문서에서 찾지 못함" + (" (지정한 줄에 없음)" if e.nths == () else "")))
+            continue
+        if e.nths is None and need_lines:
+            checks.append(Check(e.find, "첨부한 그림 부분만 고치는 요청이라 위치 없는 수정은 하지 않음 — 그림 속 줄 번호(lines)를 주세요"))
             continue
         if e.nths is None and is_vague(e.find):
             checks.append(Check(e.find, "짧은 문구라 문서 곳곳이 같이 바뀔 수 있어 바꾸지 않음 — 바꿀 줄 번호(lines)를 함께 주세요"))
@@ -262,3 +265,8 @@ def strip_unit(text: str) -> str | None:
     """'1,234,560원' → '1,234,560'. 한글 표 칸에서 '원'이 따로 떨어져 있어 찾기가 실패하는 경우용. 해당 없으면 None."""
     s = re.sub(r"\s*원$", "", text)
     return s if s != text and s else None
+
+
+def touches_amount(pairs: list[tuple[str, str]]) -> bool:
+    """이번 수정에 금액(1,234 꼴)이 들어 있나 — 문서 전체 금액 점검은 이때만 (상관없는 요청에 확인 항목이 뜨지 않게)."""
+    return any(AMOUNT_RE.search(f) or AMOUNT_RE.search(r) for f, r in pairs)

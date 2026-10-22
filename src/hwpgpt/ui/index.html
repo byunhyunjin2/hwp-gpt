@@ -54,8 +54,13 @@
   .changes { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .changes h4 { margin: 0; padding: 6px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line);
                 display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .changes h4 .undo { font-size: 12px; padding: 2px 8px; }
-  .changes.undone .item { opacity: .45; text-decoration: line-through; }
+  .item-row { display: flex; align-items: stretch; }
+  .item-row + .item-row, .item-row + .item { border-top: 1px solid var(--line); }
+  .item-row .item { flex: 1; min-width: 0; }
+  .undo-one { border: 0; border-left: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--muted);
+              padding: 0 12px; font-size: 16px; }
+  .undo-one:hover { color: var(--text); background: var(--bg); }
+  .item-row.undone .item { opacity: .45; text-decoration: line-through; }
   .item { display: block; width: 100%; text-align: left; border: 0; border-left: 4px solid; background: transparent;
           color: var(--text); padding: 6px 10px; cursor: pointer; font: inherit; }
   .item + .item { border-top: 1px solid var(--line); }
@@ -162,33 +167,30 @@ async function gotoItem(b, text, nth) {
   if (!b.querySelector(".miss")) b.append(el("small", "miss", "문서에서 찾지 못했습니다 — 이미 바뀌었거나 지워졌을 수 있습니다"));
 }
 
-// [되돌리기]는 가장 최근 요청의 상자에만 (새 요청이 오면 앞 상자의 버튼은 없앤다)
-let undoBtn = null;
-function renderChanges(changes, checks, canUndo) {
+function renderChanges(changes, checks) {
   if (!changes.length && !checks.length) return;
   const box = el("div", "changes");
-  const h = el("h4", null, `바꾼 곳 ${changes.length} · 확인 필요 ${checks.length}`);
-  undoBtn?.remove(); undoBtn = null;
-  if (canUndo) {
-    undoBtn = el("button", "undo", "↶ 되돌리기");
-    undoBtn.title = "이번 요청에서 고친 곳을 원래대로";
-    undoBtn.onclick = async () => {
-      if (busy) { say("err", "요청 처리가 끝난 뒤 되돌려 주세요"); return; }
-      const r = await api.undo_last();
-      if (r.error) { say("err", r.error); return; }
-      undoBtn.remove(); undoBtn = null; box.classList.add("undone");
-      h.textContent = `되돌림 — ${r.restored}곳 원래대로`;
-      say("ai", `고친 ${r.restored}곳을 원래대로 되돌렸습니다.` + (r.skipped ? ` ${r.skipped}곳은 그사이 바뀌어 있어 건드리지 않았습니다.` : ""));
-      refresh();
-    };
-    h.append(undoBtn);
-  }
-  box.append(h);
+  box.append(el("h4", null, `바꾼 곳 ${changes.length} · 확인 필요 ${checks.length}`));
   for (const c of changes) {
+    const row = el("div", "item-row");
     const b = el("button", "item y", `🟨 ${c.find} → ${c.replace}`);
     if (c.count > 1) b.append(el("small", null, `${c.count}곳`));
     b.onclick = () => gotoItem(b, c.replace, 0);
-    box.append(b);
+    row.append(b);
+    if (c.id) {  // 항목마다 되돌리기: 이 수정만 원래 글로
+      const u = el("button", "undo-one", "↶");
+      u.title = `되돌리기: ${c.replace} → ${c.find}`; u.setAttribute("aria-label", u.title);
+      u.onclick = async () => {
+        if (busy) { say("err", "요청 처리가 끝난 뒤 되돌려 주세요"); return; }
+        const r = await api.undo_item(c.id);
+        if (r.error) { say("err", r.error); return; }
+        u.remove(); row.classList.add("undone");
+        if (r.skipped) say("err", `${r.skipped}곳은 그사이 바뀌어 있어 되돌리지 않았습니다.`);
+        refresh();
+      };
+      row.append(u);
+    }
+    box.append(row);
   }
   for (const c of checks) {
     const b = el("button", "item r", `🟥 ${c.text}`);
@@ -375,7 +377,7 @@ async function send() {
     else if (r.error === "limit") say("err", "ChatGPT 사용 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.");
     else if (r.error) say("err", r.error);
     if (r.reply) sayReply(r.reply);
-    renderChanges(r.changes || [], r.checks || [], r.canUndo);
+    renderChanges(r.changes || [], r.checks || []);
     for (const c of r.candidates || []) showCandidate(c.docType, c.rule);
   } catch (e) { clearInterval(tick); wait.remove(); say("err", "오류: " + e); }
   busy = false; refresh();
@@ -410,10 +412,10 @@ if (location.search.includes("mock")) {
     apply_update: async () => (await new Promise((ok) => setTimeout(ok, 2500)), { ok: true }),
     progress: (() => { let p = 0; return async () => ({ pct: Math.min(95, p += 15), step: "한글 문서 고치는 중", sec: p / 5 }); })(),
     send: async (t) => (await new Promise((ok) => setTimeout(ok, 3500)), { reply: "- 2026학년도 → 2027학년도\n- 기간을 2027. 10. 30.(토)로 변경\n예산 400만 원을 이렇게 배분할까요?\n[[선택: 네, 그렇게 배분해 주세요]]\n[[선택: 재료비를 더 늘려 주세요]]", docType: "앵커사업 운영계획서",
-      changes: [{ find: "2026학년도", replace: "2027학년도", count: 3 }, { find: "2026. 10. 31.(토)", replace: "2027. 10. 30.(토)", count: 1 }],
-      checks: [{ text: "202699001", note: "보호 대상이라 바꾸지 않음: 식별번호" }, { text: "전년도 실적: 2025년", note: "전년도 실적 확인 필요" }, { text: "2026년", nth: 1, note: "옛 연도 2026가 남음 — 바꿔야 하는지 확인: 2026년 9월 1일" }], canUndo: true }),
+      changes: [{ find: "2026학년도", replace: "2027학년도", count: 3, id: "a1" }, { find: "2026. 10. 31.(토)", replace: "2027. 10. 30.(토)", count: 1, id: "a2" }],
+      checks: [{ text: "202699001", note: "보호 대상이라 바꾸지 않음: 식별번호" }, { text: "전년도 실적: 2025년", note: "전년도 실적 확인 필요" }, { text: "2026년", nth: 1, note: "옛 연도 2026가 남음 — 바꿔야 하는지 확인: 2026년 9월 1일" }] }),
     goto: async (t) => t !== "202699001",
-    undo_last: async () => ({ restored: 4, skipped: 0 }), pick_files: async () => [{ path: "C:\\예시\\작년 계획서.hwp", name: "작년 계획서.hwp" }, { path: "C:\\예시\\행사 사진.jpg", name: "행사 사진.jpg" }], clear_marks: async () => 5, new_conversation: async () => {}, login_start: async () => "ok",
+    undo_item: async () => ({ restored: 1, skipped: 0 }), pick_files: async () => [{ path: "C:\\예시\\작년 계획서.hwp", name: "작년 계획서.hwp" }, { path: "C:\\예시\\행사 사진.jpg", name: "행사 사진.jpg" }], clear_marks: async () => 5, new_conversation: async () => {}, login_start: async () => "ok",
     set_doc_type: async () => {}, memory_add: async () => {},
   };
   window.addEventListener("DOMContentLoaded", () => { wire(); setTimeout(() => showCandidate("앵커사업 운영계획서", "축제은 10월 마지막 토요일"), 300); });

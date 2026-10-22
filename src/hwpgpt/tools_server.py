@@ -10,7 +10,8 @@ from pathlib import Path
 
 from . import session
 from .hwp_bridge import HwpNotAvailable
-from .rules import DATE_RE, Edit, amount_checks, changed_years, leftover_years, resolve_text, strip_unit, validate_edits
+from .rules import (DATE_RE, Edit, amount_checks, changed_years, leftover_years, resolve_text, strip_unit,
+                    touches_amount, validate_edits)
 
 NO_HWP = "한글 문서를 열어 주세요"
 MAX_LINES = 80
@@ -28,9 +29,10 @@ def _safe(fn):
 
 
 class Tools:
-    def __init__(self, bridge, session_path: Path) -> None:
+    def __init__(self, bridge, session_path: Path, scoped: bool = False) -> None:
         self.b = bridge
         self.s = Path(session_path)
+        self.scoped = scoped  # 그림을 첨부한 요청: 그림 부분만 (위치 없는 수정 거부, 문서 전체 점검 안 함)
 
     def _check(self, text: str, note: str) -> dict:
         text = resolve_text(text, self.b.read_text())  # 띄어쓰기가 달라도 문서의 실제 문구로 표시
@@ -100,7 +102,7 @@ class Tools:
             nths, ctx = self._target(find, e.get("lines"), doc)
             items.append(Edit(find, e.get("replace", ""), e.get("reason", ""), nths, ctx))
             lines_of[id(items[-1])] = e.get("lines")
-        ok, rejected = validate_edits(doc, items)
+        ok, rejected = validate_edits(doc, items, need_lines=self.scoped)
         applied = []
         for e, n, pos in self.b.apply(ok) if ok else []:
             if not n and strip_unit(e.find) and strip_unit(e.replace):  # 표 칸의 '원'이 떨어져 있으면 숫자만으로
@@ -115,9 +117,10 @@ class Tools:
         for a in applied:  # 연도를 바꾼 날짜는 실제 일정인지 사용자가 확인하도록 빨간 표시
             if a["count"] and DATE_RE.search(a["replace"]) and changed_years([(a["find"], a["replace"])]):
                 checks.append(self._check(a["replace"], "날짜 확인 필요: 연도를 바꾸고 요일을 달력에 맞춤 — 실제 일정인지 확인"))
-        if applied:  # 예산 합계 점검을 따로 부르지 않아도 되게 (왕복 1회 절약)
+        if applied and not self.scoped:  # 문서 전체 점검: 그림 부분만 고치는 요청에는 하지 않음
             text = self.b.read_text()
-            checks += [self._check(c.text, c.note) for c in amount_checks(text)]
+            if touches_amount([(a["find"], a["replace"]) for a in applied]):  # 금액을 바꿨을 때만 합계 점검
+                checks += [self._check(c.text, c.note) for c in amount_checks(text)]
             rows = session.read(self.s)
             pairs = [(x["data"]["find"], x["data"]["replace"]) for x in rows if x["kind"] == "applied"]
             marked = [x["data"]["text"] for x in rows if x["kind"] == "check"]
@@ -138,7 +141,7 @@ def main() -> None:
     from .hwp_bridge import HwpBridge
 
     bridge = HwpBridge(ComWorker())
-    t = Tools(bridge, Path(os.environ.get("HWPGPT_SESSION", "session.jsonl")))
+    t = Tools(bridge, Path(os.environ.get("HWPGPT_SESSION", "session.jsonl")), os.environ.get("HWPGPT_SCOPED") == "1")
 
     def connected(fn):
         @functools.wraps(fn)

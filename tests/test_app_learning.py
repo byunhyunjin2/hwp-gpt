@@ -151,16 +151,16 @@ def test_dropped_files_takes_real_paths_only():
     assert dropped_files({}) == []
 
 
-def test_undo_last_restores_and_tells_ai_next_time(tmp_path, fake_bridge):
+def test_undo_item_restores_one_change_and_tells_ai(tmp_path, fake_bridge):
     from hwpgpt.tools_server import Tools
 
     fake_bridge.text = "참여시간\r\n6\r\n만족도\r\n4.0"
-    before = fake_bridge.text
     out = Tools(fake_bridge, tmp_path / "s.jsonl").apply_edits(
         [{"find": "6", "replace": "8", "lines": [2]}, {"find": "4.0", "replace": "5.0", "lines": [4]}])
     a = bare_api(tmp_path, fake_bridge)
-    a._last, a._undone, a._thread_id = {"applied": out["applied"], "checks": ["8"]}, False, "t1"
-    assert a.undo_last() == {"restored": 2, "skipped": 0}
-    assert fake_bridge.text == before and fake_bridge.unmarked == ["8"] and a.undo_last()["error"]
-    assert a._with_undo_note("다시 해줘").startswith("[참고: 바로 앞 요청에서 고친 것은 사용자가 모두 되돌렸음]")
+    a._log, a._undone, a._thread_id = {"x": out["applied"][1], "y": out["applied"][0]}, [], "t1"
+    assert a.undo_item("x") == {"restored": 1, "skipped": 0}  # 4.0 → 5.0 만 되돌림
+    assert fake_bridge.text == "참여시간\r\n8\r\n만족도\r\n4.0"
+    assert "error" in a.undo_item("x")  # 두 번은 안 됨
+    assert a._with_undo_note("다시").startswith("[참고: 사용자가 이 수정은 되돌림(원래 글로 돌아감): 4.0 → 5.0]")
     assert a._with_undo_note("또") == "또"  # 한 번만
