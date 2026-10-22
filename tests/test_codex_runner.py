@@ -133,3 +133,22 @@ def test_list_models_and_model_flag(tmp_path):
     cmd = cr.build_command(Path("codex.exe"), "요청", ["py"], {}, "t1", model="gpt-a")
     assert cmd[cmd.index("-m") + 1] == "gpt-a" and cmd[-3:] == ["resume", "t1", "요청"]
     assert "-m" not in cr.build_command(Path("codex.exe"), "요청", ["py"], {})
+
+
+def test_images_go_where_exec_and_resume_expect_them():
+    from pathlib import Path
+
+    from hwpgpt import codex_runner as cr
+
+    new = cr.build_command(Path("codex.exe"), "요청", ["py"], {}, images=["a.png", "b.jpg"])
+    assert new[-3:] == ["--image=a.png", "--image=b.jpg", "요청"]
+    cont = cr.build_command(Path("codex.exe"), "요청", ["py"], {}, "t1", images=["a.png"])
+    assert cont[-4:] == ["resume", "--image=a.png", "t1", "요청"]
+
+
+def test_attached_text_is_marked_as_reference():
+    from hwpgpt.codex_runner import compose_prompt
+
+    p = compose_prompt("이걸로 고쳐줘", [], "[첨부 파일: a.docx]\n내용")
+    assert "고칠 대상은 열린 한글 문서" in p and p.endswith("[요청]\n이걸로 고쳐줘")
+    assert compose_prompt("그냥", []) == "그냥"

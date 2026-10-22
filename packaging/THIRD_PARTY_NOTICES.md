@@ -10,6 +10,7 @@ HWP_GPT 설치본에는 아래 구성요소가 포함되어 있습니다. 각 �
 | pythonnet 3.2.1 | pywebview의 .NET 연결 | MIT | https://github.com/pythonnet/pythonnet |
 | pywin32 | 한글 COM 자동화·창 제어 | PSF License | https://github.com/mhammond/pywin32 |
 | MCP Python SDK (`mcp`) | 도구 서버 | MIT | https://github.com/modelcontextprotocol/python-sdk |
+| olefile | 첨부한 한글(.hwp) 파일 글 읽기 | BSD 2-Clause | https://github.com/decalage2/olefile |
 | Microsoft Edge WebView2 Runtime | 패널 화면 표시 (Windows 기본 제공, 동봉 안 함) | Microsoft 소프트웨어 사용 조건 | https://developer.microsoft.com/microsoft-edge/webview2/ |
 
 Codex CLI는 OpenAI의 공식 릴리스 바이너리를 수정 없이 동봉하며, 동봉 전 SHA256(릴리스 게시값)과 OpenAI 코드 서명을 확인했습니다.

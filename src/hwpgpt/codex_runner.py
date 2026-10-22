@@ -95,7 +95,7 @@ def list_models(home: Path | None = None) -> list[dict]:
 
 
 def build_command(codex: Path, prompt: str, server_cmd: list[str], server_env: dict[str, str],
-                  thread_id: str | None = None, model: str | None = None) -> list[str]:
+                  thread_id: str | None = None, model: str | None = None, images: list[str] = ()) -> list[str]:
     env = {"PYTHONIOENCODING": "utf-8", **server_env}
     env_toml = "{" + ",".join(f"{k}={_toml(v)}" for k, v in env.items()) + "}"
     cmd = [
@@ -112,7 +112,9 @@ def build_command(codex: Path, prompt: str, server_cmd: list[str], server_env: d
         cmd += ["--disable", f]
     if model:
         cmd += ["-m", model]
-    return cmd + (["resume", thread_id, prompt] if thread_id else [prompt])
+    # 첨부 그림: 새 대화는 exec의, 이어지는 대화는 resume의 --image (값을 하나씩 붙여 다음 인자를 먹지 않게)
+    img = [f"--image={p}" for p in images]
+    return cmd + (["resume", *img, thread_id, prompt] if thread_id else [*img, prompt])
 
 
 @dataclass
@@ -212,11 +214,15 @@ def progress_of(e: dict) -> tuple[int, str] | None:
     return None
 
 
-def compose_prompt(user_text: str, memory_rules: list[str]) -> str:
-    if not memory_rules:
+def compose_prompt(user_text: str, memory_rules: list[str], attached: str = "") -> str:
+    if not memory_rules and not attached:
         return user_text
-    rules = "\n".join(f"- {r}" for r in memory_rules)
-    return f"[이 사용자가 이 문서 종류에서 지켜 온 규칙]\n{rules}\n\n[요청]\n{user_text}"
+    parts = []
+    if memory_rules:
+        parts.append("[이 사용자가 이 문서 종류에서 지켜 온 규칙]\n" + "\n".join(f"- {r}" for r in memory_rules))
+    if attached:  # 참고 자료일 뿐, 고칠 대상은 열린 한글 문서
+        parts.append("[사용자가 첨부한 참고 자료 — 고칠 대상은 열린 한글 문서]\n" + attached)
+    return "\n\n".join(parts) + f"\n\n[요청]\n{user_text}"
 
 
 def _prepare_work_dir() -> Path:
@@ -251,14 +257,15 @@ def _stream(cmd: list[str], timeout: int, on_event) -> tuple[list[str], str, int
 
 
 def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = None,
-             timeout: int = 600, on_progress=lambda pct, step: None, model: str | None = None) -> TurnResult:
+             timeout: int = 600, on_progress=lambda pct, step: None, model: str | None = None,
+             images: list[str] = (), attached: str = "") -> TurnResult:
     codex = find_codex()
     if not codex:
         return TurnResult("", [], [], None, {}, "missing")
     sess = paths.session_dir() / f"{uuid.uuid4().hex}.jsonl"
     server_cmd, server_env = tools_server_cmd()
-    cmd = build_command(codex, compose_prompt(user_text, memory_rules), server_cmd,
-                        {**server_env, "HWPGPT_SESSION": str(sess)}, thread_id, model)
+    cmd = build_command(codex, compose_prompt(user_text, memory_rules, attached), server_cmd,
+                        {**server_env, "HWPGPT_SESSION": str(sess)}, thread_id, model, images)
     def on_event(e: dict) -> None:
         if pr := progress_of(e):
             on_progress(*pr)

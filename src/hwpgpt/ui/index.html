@@ -68,6 +68,14 @@
   .overlay.show { display: flex; }
   .overlay h3 { color: var(--text); margin: 0; }
   footer { padding: 10px; background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 6px; }
+  #attach { padding: 4px 8px; align-self: stretch; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px; background: var(--panel); }
+  .chips:not(:empty) { padding: 8px 10px 0; border-top: 1px solid var(--line); }
+  .chip { font-size: 12px; padding: 2px 4px 2px 8px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg);
+          display: flex; align-items: center; gap: 2px; max-width: 100%; }
+  .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip button { border: 0; background: transparent; padding: 0 4px; color: var(--muted); }
+  .msg .files { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
   textarea { flex: 1; resize: none; height: 56px; padding: 8px; border-radius: 8px; border: 1px solid var(--line);
              background: var(--bg); color: var(--text); font: inherit; }
   button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
@@ -106,7 +114,9 @@
   <p>한글에서 고칠 문서를 열면 이 패널이 옆에 붙습니다.</p></section>
 
 <main id="log" aria-live="polite"></main>
+<div class="chips" id="chips"></div>
 <footer>
+  <button id="attach" title="파일 첨부: 그림·사진, 워드, 파워포인트, 한글(hwp·hwpx), 글 파일" aria-label="파일 첨부">📎</button>
   <textarea id="input" placeholder="예: 올해(2027학년도) 걸로 바꿔줘" aria-label="요청"></textarea>
   <button class="primary" id="send">보내기</button>
 </footer>
@@ -244,7 +254,7 @@ function setOverlay(st) {
   const which = st.login === "missing" ? "ovMissing" : st.login !== "ok" ? "ovLogin" : !st.connected ? "ovHwp" : null;
   for (const id of ["ovMissing", "ovLogin", "ovHwp"]) $(id).classList.toggle("show", id === which);
   $("log").style.display = which ? "none" : "";
-  $("input").disabled = $("send").disabled = !!which || busy;
+  $("input").disabled = $("send").disabled = $("attach").disabled = !!which || busy;
 }
 
 async function refresh() {
@@ -271,11 +281,30 @@ async function refresh() {
   } catch (e) { /* 다음 주기에 다시 */ }
 }
 
+// 첨부 파일: [📎]로 고르고, 보낼 때 경로를 함께 넘긴다. 보내면 비운다.
+let files = [];
+function renderChips() {
+  $("chips").replaceChildren(...files.map((f, i) => {
+    const c = el("div", "chip"); c.title = f.path;
+    const x = el("button", null, "×"); x.setAttribute("aria-label", f.name + " 빼기");
+    x.onclick = () => { files.splice(i, 1); renderChips(); };
+    c.append(el("span", null, "📄 " + f.name), x);
+    return c;
+  }));
+}
+async function pickFiles() {
+  for (const f of await api.pick_files()) if (!files.some((g) => g.path === f.path)) files.push(f);
+  renderChips();
+}
+
 async function send() {
   const text = $("input").value.trim();
   if (!text || busy) return;
+  const sending = files; files = []; renderChips();
   busy = true; $("input").value = ""; setOverlay(lastStatus);
-  say("me", text);
+  const me = el("div", "msg me", text);
+  if (sending.length) me.append(el("span", "files", "📎 " + sending.map((f) => f.name).join(", ")));
+  $("log").append(me); scrollDown();
   const wait = el("div", "msg ai wait"), line = el("div", null, "작업 중 0% · ChatGPT에 요청 보내는 중"), bar = el("div", "bar");
   bar.append(el("i")); wait.append(line, bar);
   $("log").append(wait); scrollDown();
@@ -287,8 +316,9 @@ async function send() {
     } catch (e) { /* 다음 주기에 */ }
   }, 1000);
   try {
-    const r = await api.send(text);
+    const r = await api.send(text, sending.map((f) => f.path));
     clearInterval(tick); wait.remove();
+    for (const n of r.attachNotes || []) say("err", "첨부: " + n);
     if (r.error === "login") say("err", "ChatGPT 로그인이 필요합니다.");
     else if (r.error === "limit") say("err", "ChatGPT 사용 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.");
     else if (r.error) say("err", r.error);
@@ -301,6 +331,7 @@ async function send() {
 
 function wire() {
   $("send").onclick = send;
+  $("attach").onclick = pickFiles;
   $("input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
   $("clearMarks").onclick = async () => { const n = await api.clear_marks(); say("ai", `형광펜 표시 ${n}곳을 지웠습니다.`); refresh(); };
   $("newChat").onclick = async () => { await api.new_conversation(); $("log").replaceChildren(); say("ai", "새 대화를 시작합니다."); };
@@ -329,7 +360,8 @@ if (location.search.includes("mock")) {
     send: async (t) => (await new Promise((ok) => setTimeout(ok, 3500)), { reply: "- 2026학년도 → 2027학년도\n- 기간을 2027. 10. 30.(토)로 변경\n예산 400만 원을 이렇게 배분할까요?\n[[선택: 네, 그렇게 배분해 주세요]]\n[[선택: 재료비를 더 늘려 주세요]]", docType: "앵커사업 운영계획서",
       changes: [{ find: "2026학년도", replace: "2027학년도", count: 3 }, { find: "2026. 10. 31.(토)", replace: "2027. 10. 30.(토)", count: 1 }],
       checks: [{ text: "202699001", note: "보호 대상이라 바꾸지 않음: 식별번호" }, { text: "전년도 실적: 2025년", note: "전년도 실적 확인 필요" }, { text: "2026년", nth: 1, note: "옛 연도 2026가 남음 — 바꿔야 하는지 확인: 2026년 9월 1일" }] }),
-    goto: async (t) => t !== "202699001", clear_marks: async () => 5, new_conversation: async () => {}, login_start: async () => "ok",
+    goto: async (t) => t !== "202699001",
+    pick_files: async () => [{ path: "C:\\예시\\작년 계획서.hwp", name: "작년 계획서.hwp" }, { path: "C:\\예시\\행사 사진.jpg", name: "행사 사진.jpg" }], clear_marks: async () => 5, new_conversation: async () => {}, login_start: async () => "ok",
     set_doc_type: async () => {}, memory_add: async () => {},
   };
   window.addEventListener("DOMContentLoaded", () => { wire(); setTimeout(() => showCandidate("앵커사업 운영계획서", "축제은 10월 마지막 토요일"), 300); });

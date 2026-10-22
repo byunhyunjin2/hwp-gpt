@@ -66,6 +66,7 @@
 - Codex 동봉 파일: 본체 + `codex-code-mode-host.exe`(필수, MCP 도구 호출) + `codex-resources\*.exe` + `codex-path\rg.exe` + `codex-package.json`. `voice` 폴더·최상위 중복 사본은 불필요 (2026-10-22 시험)
 - **배포는 시험 → 사용자 승인 → `release.py publish`** (사용자 결정 2026-10-22). 오류신고 버튼은 만들지 않음 (사용자 결정)
 - 아이콘: `src/hwpgpt/assets/hwpgpt.ico` ← `packaging/make_icon.py` (Pillow, 개발 PC에서만). pywebview(WinForms)는 `webview.start(icon=)`가 없으면 실행 파일의 아이콘을 창에 씀
+- 첨부: 그림은 Codex `--image`(exec·resume 둘 다 지원, 0.163.0 확인), 문서는 글만 뽑아 프롬프트에 (`attachments.py`, 파일당 15,000자). hwp는 `olefile`, 나머지는 표준 라이브러리. 첨부도 OpenAI로 전송됨을 README에 안내
 - PowerShell 5에 한글 인자를 넘기면 깨짐 → 릴리스 노트는 `release.py`가 UTF-8로 직접 씀
 - 커밋 이메일은 GitHub noreply
 

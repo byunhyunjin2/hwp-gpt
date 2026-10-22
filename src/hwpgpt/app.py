@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from . import codex_runner as cr
-from . import __version__, paths, updater
+from . import __version__, attachments, paths, updater
 from .com_worker import ComWorker
 from .dock import Docker, EmbedDocker, find_hwp_window
 from .hwp_bridge import RED, HwpBridge, HwpNotAvailable
@@ -204,7 +204,15 @@ class Api:
         alive = [c for c in checks if not c["note"].startswith(AMOUNT_NOTES) and resolve_text(c["text"], doc) in doc]
         return list({(c["text"], c.get("nth", 0)): c for c in alive + budget}.values())
 
-    def send(self, text: str) -> dict:
+    def pick_files(self) -> list[dict]:
+        """[📎] 버튼: 파일 고르기 창. 고른 파일의 경로·이름 (보낼 때 send에 경로를 다시 넘긴다)."""
+        import webview
+
+        paths_ = self._window.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=True,
+                                                 file_types=attachments.DIALOG_FILTER) or []
+        return [{"path": p, "name": Path(p).name} for p in paths_]
+
+    def send(self, text: str, files: list[str] | None = None) -> dict:
         if not text.strip():
             return {"error": "요청을 입력해 주세요"}
         if not self._busy.acquire(blocking=False):
@@ -216,8 +224,9 @@ class Api:
             if self._snapshot is not None:
                 self._learn_now()  # 지난 요청 뒤 사용자가 직접 고친 것 먼저 확인
             self._progress = {"pct": 0, "step": "", "start": time.time()}
+            images, attached, notes = attachments.prepare(files or [])
             r = cr.run_turn(text, self._rules_for_prompt(), self._thread_id, on_progress=self._on_progress,
-                            model=self._settings.get("model") or None)
+                            model=self._settings.get("model") or None, images=images, attached=attached)
             r.checks += self._leftover_checks(r.applied, r.checks)
             r.checks = self._final_checks(r.checks)
             try:
@@ -234,7 +243,7 @@ class Api:
             self._bridge.remember_marks([c["text"] for c in r.checks], RED)
             return {"reply": r.reply, "changes": r.applied, "checks": r.checks,
                     "docType": self._doc_type, "error": r.error, "usage": r.usage,
-                    "candidates": self._pop_candidates()}
+                    "candidates": self._pop_candidates(), "attachNotes": notes}
         finally:
             self._busy.release()
 
