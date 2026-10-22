@@ -310,11 +310,13 @@ document.addEventListener("paste", async (e) => {
   const cd = e.clipboardData;
   if (!cd || ![...cd.types].includes("Files")) return;  // 글 붙여넣기는 기본 동작
   e.preventDefault();
+  // 클립보드 내용은 이 이벤트 순간에만 읽힌다 — await 전에 그림을 꺼내 둔다 (await 뒤엔 비어 있음)
+  const images = [...cd.items].filter((i) => i.kind === "file" && i.type.startsWith("image/")).map((i) => i.getAsFile());
   if (busy) return;
   const real = await api.clipboard_files();
   if (real.length) { addFiles(real); return; }
-  for (const it of [...cd.items].filter((i) => i.kind === "file" && i.type.startsWith("image/"))) {
-    const r = await api.save_pasted_image(await readDataUrl(it.getAsFile()));
+  for (const f of images) {
+    const r = await api.save_pasted_image(await readDataUrl(f));
     if (r.error) say("err", r.error); else addFiles([r]);
   }
 });
