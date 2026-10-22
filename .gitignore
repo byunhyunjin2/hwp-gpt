@@ -1,0 +1,12 @@
+# 실제 업무 문서 금지 (개인정보)
+*.hwp
+*.hwpx
+*.hml
+
+.venv/
+__pycache__/
+*.pyc
+.superpowers/
+spike/
+dist/
+build/

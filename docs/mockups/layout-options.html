@@ -1,0 +1,71 @@
+<h2>한글 옆 Claude 패널, 어떤 배치가 좋으세요?</h2>
+<p class="subtitle">세 가지 모두 실제 편집은 한글이 하고, Claude는 패널에서 대화합니다. 마음에 드는 것을 클릭하세요.</p>
+
+<style>
+  .scr{display:flex;height:300px;border:1px solid #9994;border-radius:8px;overflow:hidden;font-size:11px;position:relative;background:#e9ecef}
+  .hwp{flex:1;background:#fff;color:#222;display:flex;flex-direction:column}
+  .hwp .bar{background:#2b5797;color:#fff;padding:4px 8px;font-weight:600}
+  .hwp .tool{background:#f1f3f5;border-bottom:1px solid #ddd;padding:3px 8px;color:#666}
+  .hwp .page{margin:10px auto;width:78%;flex:1;background:#fff;box-shadow:0 0 0 1px #ddd;padding:10px;line-height:1.7}
+  .chg{background:#fff3a3;border-bottom:2px solid #e6b800}
+  .keep{background:#ffe0e0;border-bottom:2px solid #e03131}
+  .pnl{width:36%;background:#1f1f24;color:#eee;display:flex;flex-direction:column;padding:8px;gap:6px}
+  .pnl .hd{font-weight:700;color:#d97757}
+  .msg{background:#2c2c33;border-radius:6px;padding:6px}
+  .me{background:#3b3b46;align-self:flex-end}
+  .lst div{padding:2px 0;border-bottom:1px dashed #555}
+  .mem{background:#2d2417;border:1px solid #d97757;border-radius:6px;padding:6px}
+  .in{margin-top:auto;background:#2c2c33;border-radius:6px;padding:6px;color:#888}
+  .float{position:absolute;right:14px;top:40px;width:34%;height:230px;border-radius:10px;box-shadow:0 6px 24px #0006}
+  .cmd{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;width:70%;background:#1f1f24;color:#eee;border-radius:10px;padding:8px;box-shadow:0 6px 24px #0006}
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>오른쪽에 붙는 패널 (엑셀 Claude와 같은 방식)</h3>
+      <p>한글 창 오른쪽에 딱 붙어서 같이 움직이고, 한글은 그만큼 좁아집니다. 문서를 가리지 않습니다.</p>
+      <div class="scr">
+        <div class="hwp"><div class="bar">한글 - 앵커사업 운영계획서.hwp</div><div class="tool">파일 편집 보기 입력 서식</div>
+          <div class="page"><b><span class="chg">2027</span>학년도 앵커사업 프로그램 운영계획서</b><br>기간: <span class="chg">2027. 10. 30.(토)</span><br>학번 <span class="keep">202699001</span> 홍길동<br>◦ <span class="keep">2025년</span> OO구 평생학습축제 운영 결과…</div></div>
+        <div class="pnl"><div class="hd">✳ Claude</div>
+          <div class="msg me">올해 걸로 바꿔줘</div>
+          <div class="msg">12곳 바꿨어요 · 3곳 확인 필요</div>
+          <div class="lst"><div>🟨 제목 2030→2027</div><div>🟨 기간 → 10. 30.(토)</div><div>🟥 학번 그대로 둠</div><div>🟥 전년도 실적 확인</div></div>
+          <div class="mem">💡 이렇게 기억할까요?<br>"축제은 10월 마지막 토요일"<br>[저장] [고쳐서] [버리기]</div>
+          <div class="in">요청을 입력하세요…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>떠 있는 창 (항상 위)</h3>
+      <p>한글 크기는 그대로, 패널이 위에 떠 있습니다. 원하는 곳으로 옮기거나 접을 수 있지만 문서 일부를 가립니다.</p>
+      <div class="scr">
+        <div class="hwp"><div class="bar">한글 - 앵커사업 운영계획서.hwp</div><div class="tool">파일 편집 보기 입력 서식</div>
+          <div class="page"><b><span class="chg">2027</span>학년도 앵커사업 프로그램 운영계획서</b><br>기간: <span class="chg">2027. 10. 30.(토)</span><br>학번 <span class="keep">202699001</span> 홍길동</div></div>
+        <div class="pnl float"><div class="hd">✳ Claude <span style="float:right">— ✕</span></div>
+          <div class="msg me">올해 걸로 바꿔줘</div>
+          <div class="msg">12곳 바꿨어요 · 3곳 확인 필요</div>
+          <div class="in">요청을 입력하세요…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>아래쪽 명령줄 (단축키로 호출)</h3>
+      <p>평소엔 숨어 있다가 단축키(예: Ctrl+Space)를 누르면 한 줄 입력창이 뜹니다. 결과·변경 목록은 펼쳐서 봅니다.</p>
+      <div class="scr">
+        <div class="hwp"><div class="bar">한글 - 앵커사업 운영계획서.hwp</div><div class="tool">파일 편집 보기 입력 서식</div>
+          <div class="page"><b><span class="chg">2027</span>학년도 앵커사업 프로그램 운영계획서</b><br>기간: <span class="chg">2027. 10. 30.(토)</span><br>학번 <span class="keep">202699001</span> 홍길동</div></div>
+        <div class="cmd">✳ <b style="color:#d97757">Claude</b> &nbsp; 올해 걸로 바꿔줘 ▸ &nbsp;<span style="color:#aaa">12곳 바꿈 · 3곳 확인 [목록 펼치기]</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="subtitle">노란색 = Claude가 바꾼 곳, 빨간색 = 일부러 안 바꿨거나 확인이 필요한 곳</p>

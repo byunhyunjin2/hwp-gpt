@@ -1,0 +1,28 @@
+from hwpgpt.dock import dock_layout, embed_rect
+
+
+def test_embed_sits_at_right_of_edit_area_leaving_scrollbar():
+    # 한글 클라이언트 좌표의 문서 영역 (29,214)-(2139,977)
+    assert embed_rect((29, 214, 2139, 977), 380) == (1741, 214, 380, 763)
+
+
+def test_embed_narrow_edit_area_keeps_min_doc_width():
+    x, y, w, h = embed_rect((0, 100, 600, 700), 380)
+    assert x >= 300 and w == 600 - 18 - x  # 문서가 최소 300px는 보이게 패널을 좁힘
+
+WORK = (0, 0, 1920, 1040)
+
+
+def test_hwp_and_panel_fill_work_area_without_gap():
+    assert dock_layout(WORK) == ((0, 0, 1540, 1040), (1540, 0, 1920, 1040))
+
+
+def test_narrow_screen_keeps_min_hwp_width():
+    hwp, pnl = dock_layout((0, 0, 700, 800))
+    assert hwp[2] - hwp[0] >= 400 and hwp[2] == pnl[0]
+
+
+def test_outer_rect_adds_invisible_borders():
+    from hwpgpt.dock import outer_rect
+
+    assert outer_rect((0, 0, 1540, 1040), (7, 0, 7, 7)) == (-7, 0, 1547, 1047)

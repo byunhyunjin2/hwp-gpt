@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HWP_GPT</title>
+<style>
+  /* 밝은 화면: 한글 2022처럼 밝은 회색 + 파란 강조. 어두운 화면: [다크] 버튼. html의 data-theme은 항상 둘 중 하나 */
+  :root {
+    color-scheme: light;  /* 스크롤바·입력창도 같은 밝기로 */
+    --bg: #f3f3f3; --panel: #fbfbfb; --text: #222222; --muted: #6e6e6e; --line: #d6d6d6;
+    --accent: #2f6fd8; --accent-text: #ffffff; --me: #e6eefb; --ai: #ffffff;
+    --yellow: #fff3a3; --yellow-line: #e6b800; --red: #ffe0e0; --red-line: #e03131;
+    --warn-bg: #fff4e5; --warn-text: #8a4b00; --thumb: #c4c4c4;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #17181c; --panel: #1f2026; --text: #e8e8ea; --muted: #9a9ca5; --line: #30323a;
+    --accent: #19c37d; --accent-text: #0b0c0e; --me: #1f3a31; --ai: #24262d;
+    --yellow: #5a4d00; --yellow-line: #e6b800; --red: #5a1f1f; --red-line: #ff6b6b;
+    --warn-bg: #3a2a10; --warn-text: #ffcf8a; --thumb: #44464f;
+  }
+  * { scrollbar-color: var(--thumb) transparent; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.5 "Malgun Gothic", "맑은 고딕", system-ui, sans-serif;
+         display: flex; flex-direction: column; }
+  header { padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+  .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .brand .dot.on { background: var(--accent); }
+  .brand #theme { margin-left: auto; padding: 3px 8px; }
+  .brand button { padding: 3px 8px; font-size: 12px; }
+  #update.has { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .card .notes { margin-top: 6px; color: var(--muted); font-size: 12px; white-space: pre-wrap; }
+  select { font: inherit; font-size: 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); padding: 1px 4px; }
+  #limits b.low { color: var(--red-line); }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .meta b { color: var(--text); font-weight: 600; cursor: pointer; }
+  .warn { display: none; padding: 8px 12px; background: var(--warn-bg); color: var(--warn-text); font-size: 12px;
+          align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
+  .warn.show { display: flex; }
+  .warn button { margin-left: auto; }
+  main { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  main > * { flex-shrink: 0; }  /* 공간이 모자라도 상자를 찌그러뜨리지 않고 스크롤 */
+  .msg { padding: 8px 10px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; max-width: 100%; }
+  .me { background: var(--me); align-self: flex-end; }
+  .ai { background: var(--ai); border: 1px solid var(--line); }
+  .wait .bar { height: 4px; margin-top: 6px; border-radius: 2px; background: var(--line); overflow: hidden; }
+  .wait .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .choices { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  .choices button { text-align: left; border-color: var(--accent); }
+  .err { background: var(--red); border: 1px solid var(--red-line); }
+  .changes { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .changes h4 { margin: 0; padding: 6px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .item { display: block; width: 100%; text-align: left; border: 0; border-left: 4px solid; background: transparent;
+          color: var(--text); padding: 6px 10px; cursor: pointer; font: inherit; }
+  .item + .item { border-top: 1px solid var(--line); }
+  .item.y { border-left-color: var(--yellow-line); }
+  .item.r { border-left-color: var(--red-line); }
+  .item:hover { background: var(--bg); }
+  .item small { display: block; color: var(--muted); }
+  .item small.miss { color: var(--red-line); }
+  .card { background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: 10px; }
+  .card .row { display: flex; gap: 6px; margin-top: 8px; }
+  .overlay { display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center;
+             padding: 24px; flex: 1; color: var(--muted); }
+  .overlay.show { display: flex; }
+  .overlay h3 { color: var(--text); margin: 0; }
+  footer { padding: 10px; background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 6px; }
+  textarea { flex: 1; resize: none; height: 56px; padding: 8px; border-radius: 8px; border: 1px solid var(--line);
+             background: var(--bg); color: var(--text); font: inherit; }
+  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+           padding: 5px 10px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, textarea:focus-visible, .item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot" id="dot"></span>HWP_GPT
+    <button id="theme" title="어두운 화면 / 밝은 화면">☀</button>
+    <button id="update" title="새 버전 확인">업데이트</button>
+    <button id="mode" title="패널을 한글 창 안에 넣거나 옆으로 빼기">한글 안으로</button>
+    <button id="newChat" title="새 대화 시작">새 대화</button></div>
+  <div class="meta">
+    <span>대상: <b id="target">—</b></span>
+    <span>종류: <b id="docType" title="눌러서 바꾸기">미정</b></span>
+  </div>
+  <div class="meta">
+    <label>모델 <select id="model" title="ChatGPT 모델 (기본 = Codex 추천)"><option value="">기본</option></select></label>
+    <span id="limits" title="ChatGPT(Codex) 남은 사용량: 5시간 창 / 주간">남은 사용량 —</span>
+  </div>
+  <div class="meta"><span id="usage"></span></div>
+</header>
+<div class="warn" id="warn"><span id="warnText">제출 전에 형광펜 표시를 지워 주세요</span>
+  <button id="clearMarks">표시 모두 지우기</button><button id="restoreMarks">표시 다시 보기</button></div>
+
+<section class="overlay" id="ovMissing"><h3>ChatGPT 연결 프로그램이 없습니다</h3>
+  <p>HWP_GPT를 다시 설치해 주세요.</p></section>
+<section class="overlay" id="ovLogin"><h3>ChatGPT로 로그인</h3>
+  <p>사용 중인 ChatGPT 유료 계정으로 한 번만 로그인하면 됩니다.<br>API 키나 추가 비용은 없습니다.</p>
+  <button class="primary" id="loginBtn">ChatGPT로 로그인</button></section>
+<section class="overlay" id="ovHwp"><h3>한글 문서를 열어 주세요</h3>
+  <p>한글에서 고칠 문서를 열면 이 패널이 옆에 붙습니다.</p></section>
+
+<main id="log" aria-live="polite"></main>
+<footer>
+  <textarea id="input" placeholder="예: 올해(2027학년도) 걸로 바꿔줘" aria-label="요청"></textarea>
+  <button class="primary" id="send">보내기</button>
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let api = null, busy = false, lastStatus = {};
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;  // AI 문장은 항상 textContent로
+  return e;
+}
+function scrollDown() { $("log").scrollTop = $("log").scrollHeight; }
+function say(cls, text) { $("log").append(el("div", "msg " + cls, text)); scrollDown(); }
+
+// AI가 답변 끝에 [[선택: 문장]]으로 준 추천 답을 버튼으로. 누르면 그 문장을 보낸다.
+const PICK = /\[\[선택:\s*(.+?)\]\]/g;
+function sayReply(text) {
+  const picks = [...text.matchAll(PICK)].map((m) => m[1].trim());
+  const body = text.replace(PICK, "").trim();
+  if (body) say("ai", body);
+  if (!picks.length) return;
+  const box = el("div", "choices");
+  for (const p of picks) {
+    const b = el("button", null, p);
+    b.onclick = () => { if (busy) return; box.remove(); $("input").value = p; send(); };
+    box.append(b);
+  }
+  $("log").append(box); scrollDown();
+}
+
+// 목록 항목을 누르면 한글에서 그곳으로. 못 찾으면(그사이 바뀜) 항목에 알려 준다.
+async function gotoItem(b, text, nth) {
+  if (await api.goto(text, nth)) return;
+  if (!b.querySelector(".miss")) b.append(el("small", "miss", "문서에서 찾지 못했습니다 — 이미 바뀌었거나 지워졌을 수 있습니다"));
+}
+
+function renderChanges(changes, checks) {
+  if (!changes.length && !checks.length) return;
+  const box = el("div", "changes");
+  box.append(el("h4", null, `바꾼 곳 ${changes.length} · 확인 필요 ${checks.length}`));
+  for (const c of changes) {
+    const b = el("button", "item y", `🟨 ${c.find} → ${c.replace}`);
+    if (c.count > 1) b.append(el("small", null, `${c.count}곳`));
+    b.onclick = () => gotoItem(b, c.replace, 0);
+    box.append(b);
+  }
+  for (const c of checks) {
+    const b = el("button", "item r", `🟥 ${c.text}`);
+    b.append(el("small", null, c.note || ""));
+    b.onclick = () => gotoItem(b, c.text, c.nth || 0);
+    box.append(b);
+  }
+  $("log").append(box); scrollDown();
+}
+
+// 새 버전: 시작할 때 조용히 확인(있을 때만 알림), [업데이트] 버튼은 결과를 항상 알림
+async function checkUpdate(manual) {
+  const u = await api.check_update();
+  $("update").classList.toggle("has", !!u.available);
+  $("update").title = `현재 ${u.current}` + (u.available ? ` · 새 버전 ${u.latest}` : "");
+  if (u.available) showUpdate(u);
+  else if (manual) say("ai", u.error ? `업데이트를 확인하지 못했습니다 (인터넷 연결 확인): 현재 ${u.current}` : `최신 버전입니다 (${u.current})`);
+}
+
+function showUpdate(u) {
+  document.querySelector(".card.upd")?.remove();
+  const card = el("div", "card upd");
+  card.append(el("div", null, `🔔 새 버전 ${u.latest}이 있습니다 (현재 ${u.current})`));
+  if (u.notes) card.append(el("div", "notes", u.notes));
+  const row = el("div", "row");
+  const ok = el("button", "primary", "업데이트"), later = el("button", null, "나중에");
+  ok.onclick = async () => {
+    if (busy) { say("err", "요청 처리가 끝난 뒤 업데이트해 주세요"); return; }
+    ok.disabled = later.disabled = true;
+    const line = el("div", "notes", "업데이트 받는 중… 0%");
+    card.append(line);
+    const tick = setInterval(async () => { const p = await api.progress(); line.textContent = `업데이트 받는 중… ${p.pct}%`; }, 1000);
+    const r = await api.apply_update();
+    clearInterval(tick);
+    if (r.ok) line.textContent = "설치 중입니다. 패널이 잠시 닫혔다가 새 버전으로 다시 열립니다.";
+    else { line.textContent = r.error; ok.disabled = later.disabled = false; }
+  };
+  later.onclick = () => card.remove();
+  row.append(ok, later); card.append(row);
+  $("log").append(card); scrollDown();
+}
+
+function showCandidate(docType, rule) {
+  const card = el("div", "card");
+  card.append(el("div", null, "💡 이렇게 기억할까요?"));
+  const ta = el("textarea"); ta.value = rule; ta.style.width = "100%"; ta.style.marginTop = "6px";
+  card.append(ta);
+  const row = el("div", "row");
+  const save = el("button", "primary", "저장"), drop = el("button", null, "버리기");
+  save.onclick = async () => { await api.memory_add(ta.value, docType); card.replaceWith(el("div", "msg ai", "기억했습니다: " + ta.value)); };
+  drop.onclick = () => card.remove();
+  row.append(save, drop); card.append(row);
+  $("log").append(card); scrollDown();
+}
+window.showCandidate = showCandidate;
+
+function renderLimits(l) {
+  const box = $("limits");
+  if (!l) { box.textContent = "남은 사용량 —"; return; }
+  box.replaceChildren(document.createTextNode("남은 사용량 5시간 "));
+  for (const [v, sep] of [[l.five_hour_left, " · 주간 "], [l.weekly_left, ""]]) {
+    const b = el("b", v < 20 ? "low" : null, v + "%");
+    box.append(b, document.createTextNode(sep));
+  }
+}
+
+function showMode(mode) {
+  $("mode").textContent = mode === "embed" ? "옆으로 빼기" : "한글 안으로";
+}
+
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $("theme").textContent = t === "dark" ? "☀" : "🌙";  // 누르면 바뀔 화면
+}
+
+function renderModels(models, current) {
+  const sel = $("model");
+  if (sel.options.length !== models.length + 1) {
+    sel.replaceChildren(el("option", null, "기본"));
+    sel.options[0].value = "";
+    for (const m of models) { const o = el("option", null, m.name); o.value = m.slug; sel.append(o); }
+  }
+  if (document.activeElement !== sel) sel.value = current || "";
+}
+
+function setOverlay(st) {
+  const which = st.login === "missing" ? "ovMissing" : st.login !== "ok" ? "ovLogin" : !st.connected ? "ovHwp" : null;
+  for (const id of ["ovMissing", "ovLogin", "ovHwp"]) $(id).classList.toggle("show", id === which);
+  $("log").style.display = which ? "none" : "";
+  $("input").disabled = $("send").disabled = !!which || busy;
+}
+
+async function refresh() {
+  if (!api) return;
+  try {
+    const st = await api.status();
+    lastStatus = st;
+    $("dot").classList.toggle("on", st.connected && st.login === "ok");
+    $("target").textContent = st.target || "—";
+    $("docType").textContent = st.docType || "미정";
+    $("warn").classList.toggle("show", !!(st.hasMarks || st.canRestore));
+    $("clearMarks").hidden = !st.hasMarks;
+    $("restoreMarks").hidden = !st.canRestore;
+    $("warnText").textContent = st.hasMarks ? "제출 전에 형광펜 표시를 지워 주세요" : "형광펜 표시를 지웠습니다";
+    const u = st.usage || {};
+    $("usage").textContent = u.input_tokens ? `지난 요청 ${Math.round(u.input_tokens / 1000)}천 토큰` : "";
+    for (const c of st.candidates || []) showCandidate(c.docType, c.rule);
+    renderLimits(st.limits);
+    showMode(st.mode);
+    const set = st.settings || {};
+    if (set.theme) applyTheme(set.theme);
+    renderModels(st.models || [], set.model);
+    setOverlay(st);
+  } catch (e) { /* 다음 주기에 다시 */ }
+}
+
+async function send() {
+  const text = $("input").value.trim();
+  if (!text || busy) return;
+  busy = true; $("input").value = ""; setOverlay(lastStatus);
+  say("me", text);
+  const wait = el("div", "msg ai wait"), line = el("div", null, "작업 중 0% · ChatGPT에 요청 보내는 중"), bar = el("div", "bar");
+  bar.append(el("i")); wait.append(line, bar);
+  $("log").append(wait); scrollDown();
+  const tick = setInterval(async () => {  // 멈춘 것처럼 보이지 않게 진행률·경과 시간
+    try {
+      const p = await api.progress();
+      line.textContent = `작업 중 ${p.pct}% · ${p.step || "준비 중"} · ${p.sec}초`;
+      bar.firstChild.style.width = p.pct + "%";
+    } catch (e) { /* 다음 주기에 */ }
+  }, 1000);
+  try {
+    const r = await api.send(text);
+    clearInterval(tick); wait.remove();
+    if (r.error === "login") say("err", "ChatGPT 로그인이 필요합니다.");
+    else if (r.error === "limit") say("err", "ChatGPT 사용 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.");
+    else if (r.error) say("err", r.error);
+    if (r.reply) sayReply(r.reply);
+    renderChanges(r.changes || [], r.checks || []);
+    for (const c of r.candidates || []) showCandidate(c.docType, c.rule);
+  } catch (e) { clearInterval(tick); wait.remove(); say("err", "오류: " + e); }
+  busy = false; refresh();
+}
+
+function wire() {
+  $("send").onclick = send;
+  $("input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+  $("clearMarks").onclick = async () => { const n = await api.clear_marks(); say("ai", `형광펜 표시 ${n}곳을 지웠습니다.`); refresh(); };
+  $("newChat").onclick = async () => { await api.new_conversation(); $("log").replaceChildren(); say("ai", "새 대화를 시작합니다."); };
+  $("loginBtn").onclick = async () => { $("loginBtn").disabled = true; $("loginBtn").textContent = "브라우저에서 로그인해 주세요…"; await api.login_start(); $("loginBtn").disabled = false; $("loginBtn").textContent = "ChatGPT로 로그인"; refresh(); };
+  $("mode").onclick = async () => { const m = await api.set_mode(lastStatus.mode === "embed" ? "dock" : "embed"); lastStatus.mode = m; showMode(m); };
+  $("restoreMarks").onclick = async () => { const n = await api.restore_marks(); say("ai", `형광펜 표시 ${n}곳을 다시 칠했습니다.`); refresh(); };
+  $("theme").onclick = () => { const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; applyTheme(t); api.set_setting("theme", t); };
+  $("model").onchange = (e) => api.set_setting("model", e.target.value);
+  $("docType").onclick = async () => { const v = prompt("문서 종류", lastStatus.docType || ""); if (v != null) { await api.set_doc_type(v); refresh(); } };
+  applyTheme(matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");  // 저장된 설정이 오기 전 기본
+  $("update").onclick = () => checkUpdate(true);
+  refresh(); setInterval(refresh, 2000);
+  checkUpdate(false).catch(() => {});
+}
+
+window.addEventListener("pywebviewready", () => { api = window.pywebview.api; wire(); });
+
+// 브라우저 미리보기용 (?mock): 실제 앱에서는 쓰이지 않음
+if (location.search.includes("mock")) {
+  api = {
+    status: async () => ({ login: "ok", connected: true, target: "운영계획서.hwp", hasMarks: true, docType: "앵커사업 운영계획서", usage: { input_tokens: 32368 }, mode: "dock", settings: { theme: "dark" }, models: [{ slug: "gpt-a", name: "GPT-A" }, { slug: "gpt-b", name: "GPT-B" }], canRestore: false, limits: { five_hour_left: 94, weekly_left: 18, plan: "plus" } }),
+    set_mode: async (m) => m, set_setting: async () => ({}), restore_marks: async () => 5,
+    check_update: async () => ({ current: "1.0.1", latest: "1.0.2", available: true, notes: "- 표 금액 점검 개선\n- 업데이트 버튼" }),
+    apply_update: async () => (await new Promise((ok) => setTimeout(ok, 2500)), { ok: true }),
+    progress: (() => { let p = 0; return async () => ({ pct: Math.min(95, p += 15), step: "한글 문서 고치는 중", sec: p / 5 }); })(),
+    send: async (t) => (await new Promise((ok) => setTimeout(ok, 3500)), { reply: "- 2026학년도 → 2027학년도\n- 기간을 2027. 10. 30.(토)로 변경\n예산 400만 원을 이렇게 배분할까요?\n[[선택: 네, 그렇게 배분해 주세요]]\n[[선택: 재료비를 더 늘려 주세요]]", docType: "앵커사업 운영계획서",
+      changes: [{ find: "2026학년도", replace: "2027학년도", count: 3 }, { find: "2026. 10. 31.(토)", replace: "2027. 10. 30.(토)", count: 1 }],
+      checks: [{ text: "202699001", note: "보호 대상이라 바꾸지 않음: 식별번호" }, { text: "전년도 실적: 2025년", note: "전년도 실적 확인 필요" }, { text: "2026년", nth: 1, note: "옛 연도 2026가 남음 — 바꿔야 하는지 확인: 2026년 9월 1일" }] }),
+    goto: async (t) => t !== "202699001", clear_marks: async () => 5, new_conversation: async () => {}, login_start: async () => "ok",
+    set_doc_type: async () => {}, memory_add: async () => {},
+  };
+  window.addEventListener("DOMContentLoaded", () => { wire(); setTimeout(() => showCandidate("앵커사업 운영계획서", "축제은 10월 마지막 토요일"), 300); });
+}
+</script>
+</body>
+</html>
