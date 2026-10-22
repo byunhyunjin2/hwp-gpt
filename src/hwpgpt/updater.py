@@ -38,8 +38,22 @@ def _get(url: str, timeout: float) -> bytes:
         return r.read()
 
 
+def cleanup() -> int:
+    """지난 업데이트 때 받은 설치 파일(약 110MB)을 임시 폴더에서 지운다. 아직 실행 중이라 잠긴 파일은 다음에."""
+    n = 0
+    for p in Path(tempfile.gettempdir()).glob("HWP_GPT-Setup-*.exe"):
+        try:
+            p.unlink()
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
 def check(current: str = __version__, timeout: float = 5) -> dict:
-    """{"current", "latest", "notes", "available"}. 인터넷이 안 되면 available=False, error에 이유."""
+    """{"current", "latest", "notes", "available"}. 인터넷이 안 되면 available=False, error에 이유.
+    패널을 켤 때마다 불리므로, 업데이트 뒤 남은 설치 파일도 여기서 지운다."""
+    cleanup()
     try:
         info = json.loads(_get(LATEST, timeout))
     except Exception as e:  # 오프라인·차단·릴리스 없음: 패널은 그대로 쓰게

@@ -47,3 +47,12 @@ def test_download_rejects_hash_mismatch(monkeypatch, tmp_path):
     with pytest.raises(ValueError):
         updater.download({**good, "sha256": "00"})
     assert not (tmp_path / "s.exe").exists()
+
+
+def test_check_removes_leftover_setup_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(tmp_path))
+    (tmp_path / "HWP_GPT-Setup-1.0.1.exe").write_bytes(b"x")
+    (tmp_path / "다른파일.exe").write_bytes(b"x")
+    monkeypatch.setattr(updater, "_get", lambda url, timeout: b'{"version": "1.0.1"}')
+    updater.check("1.0.1")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["다른파일.exe"]
