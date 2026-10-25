@@ -101,8 +101,18 @@ end;
 
 procedure InitializeWizard();
 begin
-  if Installed <> '' then
+  if Installed = '' then
+    exit;
+  if CompareVersion(Installed, '{#AppVersion}') = 0 then
+    WizardForm.Caption := 'HWP_GPT {#AppVersion} 다시 설치'
+  else
     WizardForm.Caption := 'HWP_GPT 업데이트 (' + Installed + ' → {#AppVersion})';
+end;
+
+{ 업데이트는 처음 물을 때 이미 '예'를 받았으니 '설치 준비 완료' 화면을 건너뛰고 바로 진행 }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (Installed <> '') and (PageID = wpReady);
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
