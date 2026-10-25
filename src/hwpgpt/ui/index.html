@@ -77,6 +77,9 @@
              padding: 24px; flex: 1; color: var(--muted); }
   .overlay.show { display: flex; }
   .overlay h3 { color: var(--text); margin: 0; }
+  /* 업데이트 알림: 대화 영역(#log) 밖이라 한글 문서가 없거나 로그인 전이어도 보인다 */
+  #notice:not(:empty) { padding: 8px 12px 0; background: var(--bg); }
+  #notice .note { padding: 6px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); font-size: 12px; }
   .updbar { display: none; padding: 8px 12px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; }
   .updbar.show { display: block; }
   .updbar .bar { height: 6px; margin-top: 4px; border-radius: 3px; background: var(--line); overflow: hidden; }
@@ -121,6 +124,7 @@
 </header>
 <div class="warn" id="warn"><span id="warnText">제출 전에 형광펜 표시를 지워 주세요</span>
   <button id="clearMarks">표시 모두 지우기</button><button id="restoreMarks">표시 다시 보기</button></div>
+<div id="notice" aria-live="polite"></div>
 
 <section class="overlay" id="ovMissing"><h3>ChatGPT 연결 프로그램이 없습니다</h3>
   <p>HWP_GPT를 다시 설치해 주세요.</p></section>
@@ -217,11 +221,17 @@ function renderChanges(changes, checks) {
 
 // 새 버전: 시작할 때 조용히 확인(있을 때만 알림), [업데이트] 버튼은 결과를 항상 알림
 async function checkUpdate(manual) {
-  const u = await api.check_update();
-  $("update").classList.toggle("has", !!u.available);
-  $("update").title = `현재 ${u.current}` + (u.available ? ` · 새 버전 ${u.latest}` : "");
+  const btn = $("update");
+  if (manual) { btn.disabled = true; btn.textContent = "확인 중…"; $("notice").replaceChildren(); }
+  let u;
+  try { u = await api.check_update(); } finally { btn.disabled = false; btn.textContent = "업데이트"; }
+  btn.classList.toggle("has", !!u.available);
+  btn.title = `현재 ${u.current}` + (u.available ? ` · 새 버전 ${u.latest}` : "");
   if (u.available) showUpdate(u);
-  else if (manual) say("ai", u.error ? `업데이트를 확인하지 못했습니다 (인터넷 연결 확인): 현재 ${u.current}` : `최신 버전입니다 (${u.current})`);
+  else if (manual) {
+    const n = el("div", "note", u.error ? `업데이트를 확인하지 못했습니다 (인터넷 연결 확인): 현재 ${u.current}` : `최신 버전입니다 (${u.current})`);
+    $("notice").append(n); setTimeout(() => n.remove(), 6000);
+  }
 }
 
 function showUpdate(u) {
@@ -243,11 +253,11 @@ function showUpdate(u) {
     const r = await api.apply_update();
     clearInterval(tick);
     if (r.ok) show(100, "받기 100% · 설치 중 — 패널이 잠시 닫히고 설치 진행 창이 뜬 뒤 새 버전으로 다시 열립니다.");
-    else { bar.classList.remove("show"); say("err", r.error); showUpdate(u); }
+    else { bar.classList.remove("show"); showUpdate(u); $("notice").append(el("div", "note", r.error)); }
   };
   later.onclick = () => card.remove();
   row.append(ok, later); card.append(row);
-  $("log").append(card); scrollDown();
+  $("notice").append(card);
 }
 
 function showCandidate(docType, rule) {
