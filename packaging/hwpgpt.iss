@@ -47,3 +47,76 @@ Filename: "{app}\HWP_GPT.exe"; Description: "HWP_GPT 실행"; Flags: nowait post
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
+
+[Code]
+{ 이미 설치된 PC에서 새 설치 파일을 직접 실행하면 '업데이트'로: 묻고, 같은 폴더에 덮어쓰고, 끝나면 패널을 다시 띄운다.
+  설정·기억한 규칙(%APPDATA%\HWP_GPT)은 건드리지 않는다. 패널의 [업데이트](/SILENT)는 묻지 않는다. }
+var
+  Installed: String;
+
+function InstalledVersion(): String;
+begin
+  if not RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6F1C2B7E-4A0D-4C3B-9E51-2D8A7F3C9B10}_is1',
+                             'DisplayVersion', Result) then
+    Result := '';
+end;
+
+{ '1.0.3'과 '1.0.5' 비교: 앞이 작으면 음수, 같으면 0, 크면 양수 }
+function CompareVersion(A, B: String): Integer;
+var
+  X, Y, I: Integer;
+begin
+  Result := 0;
+  while (Result = 0) and ((A <> '') or (B <> '')) do
+  begin
+    I := Pos('.', A); if I = 0 then I := Length(A) + 1;
+    X := StrToIntDef(Copy(A, 1, I - 1), 0); Delete(A, 1, I);
+    I := Pos('.', B); if I = 0 then I := Length(B) + 1;
+    Y := StrToIntDef(Copy(B, 1, I - 1), 0); Delete(B, 1, I);
+    Result := X - Y;
+  end;
+end;
+
+function InitializeSetup(): Boolean;
+var
+  C: Integer;
+begin
+  Result := True;
+  Installed := InstalledVersion();
+  if (Installed = '') or WizardSilent() then
+    exit;
+  C := CompareVersion(Installed, '{#AppVersion}');
+  if C < 0 then
+    Result := MsgBox('HWP_GPT ' + Installed + ' 버전이 설치되어 있습니다.' #13#10 +
+                     '{#AppVersion} 버전으로 업데이트할까요?' #13#10#13#10 +
+                     '설정과 기억한 규칙은 그대로 유지됩니다. 열려 있는 패널은 닫혔다가 다시 열립니다.',
+                     mbConfirmation, MB_YESNO) = IDYES
+  else if C = 0 then
+    Result := MsgBox('HWP_GPT {#AppVersion} 버전이 이미 설치되어 있습니다. 다시 설치할까요?',
+                     mbConfirmation, MB_YESNO) = IDYES
+  else
+    Result := MsgBox('더 새 버전(' + Installed + ')이 설치되어 있습니다.' #13#10 +
+                     '예전 버전({#AppVersion})으로 바꿀까요?', mbError, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+end;
+
+procedure InitializeWizard();
+begin
+  if Installed <> '' then
+    WizardForm.Caption := 'HWP_GPT 업데이트 (' + Installed + ' → {#AppVersion})';
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if Installed = '' then
+    exit;
+  if CurPageID = wpInstalling then
+  begin
+    WizardForm.PageNameLabel.Caption := '업데이트하는 중';
+    WizardForm.PageDescriptionLabel.Caption := 'HWP_GPT를 {#AppVersion} 버전으로 바꾸고 있습니다.';
+  end
+  else if CurPageID = wpFinished then
+  begin
+    WizardForm.FinishedHeadingLabel.Caption := '업데이트를 마쳤습니다';
+    WizardForm.FinishedLabel.Caption := 'HWP_GPT ' + Installed + ' → {#AppVersion} 업데이트가 끝났습니다.';
+  end;
+end;
