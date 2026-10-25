@@ -6,10 +6,11 @@ Dispatch는 숨은 새 한글을 띄운다 (docs/spike-results.md, MISTAKES M-00
 from typing import Callable
 
 from .com_worker import ComWorker
-from .rules import Edit, strip_unit
+from .rules import Edit, same_kind_neighbor, strip_unit
 
 YELLOW = (255, 240, 0)   # 바꾼 곳
 RED = (255, 120, 120)    # 안 바꿈·확인
+SHAPE = ("AlignType", "LeftMargin", "RightMargin", "Indentation")  # 이웃 문단에 맞출 문단 모양
 
 
 class HwpNotAvailable(Exception):
@@ -78,6 +79,43 @@ class HwpBridge:
         p.Color = h.RGBColor(*rgb)
         h.HAction.Execute("MarkPenShape", p.HSet)
 
+    @staticmethod
+    def _para_text(h, lst: int, para: int) -> str | None:
+        """그 문단의 글. 없는 문단이면 None."""
+        if not h.SetPos(lst, para, 0) or tuple(h.GetPos())[:2] != (lst, para):
+            return None
+        h.HAction.Run("MoveSelParaEnd")
+        t = h.GetTextFile("UNICODE", "saveblock").rstrip("\r\n")
+        h.HAction.Run("Cancel")
+        return t
+
+    def _tidy(self, h, paras) -> None:
+        """고친 문단을 주위에 맞춘다: 같은 글머리 종류의 가장 가까운 이웃(앞뒤 3문단, 같은 표 칸 안)과
+        정렬·여백·들여쓰기를 같게 하고, 한글 줄 나눔을 어절 단위로(단어가 줄 끝에서 갈라지지 않게)."""
+        for lst, para in sorted(paras):
+            text = self._para_text(h, lst, para)
+            if text is None:
+                continue
+            near = []
+            for d in (1, -1, 2, -2, 3, -3):  # 가까운 순, 앞 문단 먼저
+                t = self._para_text(h, lst, para - d) if para - d >= 0 else None
+                if t is not None:
+                    near.append((para - d, t))
+            src = same_kind_neighbor(text, near)
+            shape = {}
+            if src is not None:
+                h.SetPos(lst, src, 0)
+                s = h.HParameterSet.HParaShape
+                h.HAction.GetDefault("ParagraphShape", s.HSet)
+                shape = {k: getattr(s, k) for k in SHAPE}
+            h.SetPos(lst, para, 0)
+            p = h.HParameterSet.HParaShape
+            h.HAction.GetDefault("ParagraphShape", p.HSet)
+            for k, v in shape.items():
+                setattr(p, k, v)
+            p.BreakNonLatinWord = 0  # 0 = 어절, 1 = 글자(한글 기본값) — 2026-10-25 시험으로 확인
+            h.HAction.Execute("ParagraphShape", p.HSet)
+
     def _mark_all(self, h, text: str, rgb, limit: int) -> int:
         n = 0
         found = self._find(h, text, from_start=True)
@@ -136,6 +174,7 @@ class HwpBridge:
                 if pos:
                     self._marks[e.replace] = YELLOW
                 out.append((e, len(pos), pos))
+            self._tidy(h, {(lst, para) for _, _, ps in out for lst, para, _ in ps})
             return out
 
         return self._call(do)

@@ -26,11 +26,13 @@
   body { background: var(--bg); color: var(--text); font: 13px/1.5 "Malgun Gothic", "맑은 고딕", system-ui, sans-serif;
          display: flex; flex-direction: column; }
   header { padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
-  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; }
-  .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  /* 윗줄은 한 줄로 고정: 창이 좁으면 버튼이 줄바꿈되지 않고 글자·여백이 작아진다 */
+  .brand { display: flex; align-items: center; gap: clamp(3px, 1.6vw, 8px); font-weight: 700; white-space: nowrap;
+           font-size: clamp(11px, 3.6vw, 13px); }
+  .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
   .brand .dot.on { background: var(--accent); }
-  .brand #theme { margin-left: auto; padding: 3px 8px; }
-  .brand button { padding: 3px 8px; font-size: 12px; }
+  .brand #theme { margin-left: auto; }
+  .brand button { padding: 3px clamp(4px, 1.8vw, 8px); font-size: clamp(10px, 3.2vw, 12px); white-space: nowrap; flex-shrink: 0; }
   #update.has { border-color: var(--accent); color: var(--accent); font-weight: 700; }
   .card .notes { margin-top: 6px; color: var(--muted); font-size: 12px; white-space: pre-wrap; }
   select { font: inherit; font-size: 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); padding: 1px 4px; }

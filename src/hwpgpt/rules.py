@@ -270,3 +270,26 @@ def strip_unit(text: str) -> str | None:
 def touches_amount(pairs: list[tuple[str, str]]) -> bool:
     """이번 수정에 금액(1,234 꼴)이 들어 있나 — 문서 전체 금액 점검은 이때만 (상관없는 요청에 확인 항목이 뜨지 않게)."""
     return any(AMOUNT_RE.search(f) or AMOUNT_RE.search(r) for f, r in pairs)
+
+
+_MARK_RE = re.compile(r"^(\s*)([-•·○●◦▪■□◆◇▶※*]|\(?\d{1,2}[.)]|\(?[가-하][.)]|[①-⑳㉠-㉭㉮-㉻])\s")
+
+
+def para_kind(text: str) -> str | None:
+    """문단 머리 모양(앞 공백 + 글머리 종류). 글머리 없는 문단은 None — 제목·본문을 구별할 수 없어 맞추지 않는다.
+    '1.'과 '2.', '가.'와 '나.'는 같은 종류."""
+    m = _MARK_RE.match(text)
+    if not m:
+        return None
+    mark = re.sub(r"\d{1,2}", "0", m.group(2))
+    mark = re.sub(r"[가-하]", "가", mark)
+    mark = re.sub(r"[①-⑳]", "①", re.sub(r"[㉠-㉭]", "㉠", re.sub(r"[㉮-㉻]", "㉮", mark)))
+    return f"{len(m.group(1).expandtabs(4))}{mark}"
+
+
+def same_kind_neighbor(text: str, neighbors: list[tuple[int, str]]) -> int | None:
+    """고친 문단과 같은 글머리 종류인 가장 가까운 이웃 문단 번호. neighbors = [(문단 번호, 글)], 가까운 순."""
+    kind = para_kind(text)
+    if kind is None:
+        return None
+    return next((i for i, t in neighbors if para_kind(t) == kind), None)

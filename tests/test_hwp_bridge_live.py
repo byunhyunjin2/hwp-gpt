@@ -136,3 +136,28 @@ def test_undo_skips_spot_user_changed(bridge):
     bridge._type_at_start("x")  # 같은 문단 앞에 글자가 생겨 자리가 밀림 → 엉뚱한 곳을 바꾸지 않고 건너뜀
     assert bridge.undo([{"find": "2026년", "replace": "2027년", "pos": pos}]) == (0, 1)
     assert "2027년" in bridge.read_text()
+
+
+def _shape(bridge, para):
+    def do(h):
+        h.SetPos(0, para, 0)
+        p = h.HParameterSet.HParaShape
+        h.HAction.GetDefault("ParagraphShape", p.HSet)
+        return p.AlignType, p.LeftMargin, p.Indentation, p.BreakNonLatinWord
+    return bridge._call(do)
+
+
+def test_edit_matches_neighbor_bullet_shape_and_breaks_by_word(bridge):
+    bridge._type_at_start(" ○ 일시: 2027년\r\n ○ 장소: OO구\r\n")  # 문단 0, 1 + 원래 SAMPLE이 문단 2
+
+    def indent_first(h):  # 이웃(문단 0)은 들여쓰기·양쪽 정렬, 고칠 문단(1)은 기본값
+        h.SetPos(0, 0, 0)
+        p = h.HParameterSet.HParaShape
+        h.HAction.GetDefault("ParagraphShape", p.HSet)
+        p.LeftMargin, p.Indentation = 2000, -1000
+        h.HAction.Execute("ParagraphShape", p.HSet)
+    bridge._call(indent_first)
+    before = _shape(bridge, 0)
+    assert bridge.apply([Edit("OO구", "OO구 평생학습관", "")])[0][1] == 1
+    assert _shape(bridge, 1) == before[:3] + (0,)  # 이웃과 같은 모양, 어절 단위 줄 나눔
+    assert _shape(bridge, 2)[1:3] == (0, 0)  # 안 고친 문단은 그대로

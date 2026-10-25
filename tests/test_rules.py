@@ -152,3 +152,15 @@ def test_short_number_needs_location_and_line_context_avoids_false_id():
     ok, checks = validate_edits(doc, [Edit("6", "8", "", nths=(), context=())])
     assert ok == [] and "지정한 줄에 없음" in checks[0].note
     assert len(validate_edits(doc, [Edit("만족도 4.0", "만족도 5.0", "")])[0]) == 1  # 긴 문구는 위치 없이도
+
+
+def test_para_kind_groups_same_bullets():
+    from hwpgpt.rules import para_kind, same_kind_neighbor
+
+    assert para_kind("  - 행사 안내") == para_kind("  - 다른 줄") != para_kind("- 행사 안내")  # 앞 공백도 봄
+    assert para_kind("1. 목적") == para_kind("12. 기대효과") and para_kind("가. 일정") == para_kind("나. 장소")
+    assert para_kind("○ 추진 배경") == para_kind("○ 추진 내용")
+    assert para_kind("평생학습축제 운영 계획") is None  # 글머리 없으면 맞추지 않음
+    near = [(4, "□ 개요"), (6, " ○ 장소: OO구"), (3, " ○ 일시: 2027. 10. 30.")]
+    assert same_kind_neighbor(" ○ 대상: 주민 누구나", near) == 6
+    assert same_kind_neighbor("제목 줄", near) is None
