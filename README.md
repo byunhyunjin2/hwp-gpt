@@ -7,9 +7,9 @@
 > 한글과컴퓨터의 공식 제품이 아니며, 한컴과 관련이 없는 개인 프로젝트입니다. "HWP"는 문서 형식 이름으로 사용합니다.
 
 <!-- latest -->
-현재 버전: **v1.0.6** — [설치 파일 받기](https://github.com/byunhyunjin2/hwp-gpt/releases/latest)
+현재 버전: **v1.0.7** — [설치 파일 받기](https://github.com/byunhyunjin2/hwp-gpt/releases/latest)
 
-- 새 설치 파일을 직접 받아 실행해도, 이미 설치된 PC면 업데이트로 진행 (설정·기억한 규칙 유지)
+- 화면 배율(125%·150% 등)이 큰 PC에서 패널이 화면 밖으로 밀리던 문제 고침
 <!-- /latest -->
 
 ## 필요한 것
