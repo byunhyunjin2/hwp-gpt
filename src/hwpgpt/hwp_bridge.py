@@ -299,6 +299,91 @@ class HwpBridge:
 
         return self._call(do)
 
+    def clear_all_marks(self) -> int:
+        """문서의 형광펜을 모두 지운다 (패널이 칠한 것 + 남은 것 + 사용자가 칠한 것). 지운 표시 수.
+        본문은 전체 선택, 표는 표마다 모든 칸을 선택해서 지운다 (본문 전체 선택은 표 칸 안까지는 지우지 못함)."""
+
+        def count(h) -> int:
+            return h.GetTextFile("HWPML2X", "").count("<MARKPENBEGIN")
+
+        def do(h):
+            before = count(h)
+            h.HAction.Run("MoveDocBegin")
+            h.HAction.Run("SelectAll")
+            h.HAction.Run("MarkPenDelete")
+            h.HAction.Run("Cancel")
+            c = h.HeadCtrl
+            while c:
+                if c.CtrlID == "tbl":
+                    h.SetPosBySet(c.GetAnchorPos(0))
+                    h.FindCtrl()
+                    h.HAction.Run("ShapeObjTableSelCell")
+                    h.HAction.Run("TableCellBlockExtend")
+                    h.HAction.Run("TableCellBlockExtend")  # 표 전체 칸 선택
+                    h.HAction.Run("MarkPenDelete")
+                    h.HAction.Run("Cancel")
+                c = c.Next
+            h.HAction.Run("MoveDocBegin")
+            self._marks.clear()
+            self._cleared = {}
+            return before - count(h)
+
+        return self._call(do)
+
+    @staticmethod
+    def _cell_row(h) -> int:
+        """커서가 있는 표 칸의 줄 번호(1부터) — 상태 표시줄의 칸 주소 "(A3): …"."""
+        import re
+
+        m = re.search(r"\(([A-Z]+)(\d+)\)", str(h.KeyIndicator()[-1]))
+        return int(m.group(2)) if m else 0
+
+    def _goto_cell(self, h, text: str, nth: int) -> int | None:
+        """text(nth번째)가 든 표 칸으로 가서 그 줄 번호(1부터). 표 칸이 아니면 None."""
+        found = self._find(h, text, from_start=True)
+        for _ in range(nth):
+            found = found and self._find(h, text, from_start=False)
+        if not found:
+            return None
+        h.HAction.Run("Cancel")
+        if not (h.ParentCtrl and h.ParentCtrl.CtrlID == "tbl"):
+            return None
+        return self._cell_row(h)
+
+    def table_rows(self, action: str, find: str, nth: int = 0, count: int = 1,
+                   until: str = "", until_nth: int = 0, to_end: bool = False) -> str | None:
+        """find(nth번째)가 든 표 칸의 줄을 지우거나(delete) 그 아래에 빈 줄을 넣는다(insert_below). 안 되면 이유.
+        until: delete에서 마지막으로 지울 줄의 칸 글, to_end: 표 마지막 줄까지 — 줄 수는 칸 주소로 직접 센다
+        (AI가 세거나 마지막 줄을 고르면 틀림, 2026-10-25 실제 ChatGPT 시험)."""
+        run = {"delete": "TableDeleteRow", "insert_below": "TableInsertLowerRow"}.get(action)
+        if not run:
+            return f"모르는 작업: {action}"
+
+        def do(h):
+            if until:
+                last = self._goto_cell(h, until, until_nth)
+                if not last:
+                    return "until 글이 든 표 칸을 찾지 못함"
+            row = self._goto_cell(h, find, nth)
+            if row is None:
+                return "표 칸 안의 글을 찾지 못함"
+            n = count
+            if to_end and action == "delete":
+                h.HAction.Run("TableColPageDown")  # 이 열의 맨 아래 칸
+                last = self._cell_row(h)
+                row = self._goto_cell(h, find, nth)
+                n = last - row + 1
+            elif until:
+                if last < row:
+                    return "until이 find보다 위에 있음"
+                n = last - row + 1
+            for _ in range(max(1, n)):
+                if not h.HAction.Run(run):
+                    return "한글이 줄 작업을 거부함"
+            return None
+
+        return self._call(do)
+
     def has_marks(self) -> bool:
         return bool(self._marks)
 

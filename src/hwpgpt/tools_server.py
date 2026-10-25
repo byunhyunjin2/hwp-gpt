@@ -11,7 +11,7 @@ from pathlib import Path
 from . import session
 from .hwp_bridge import HwpNotAvailable
 from .rules import (DATE_RE, Edit, amount_checks, changed_years, leftover_years, resolve_text, strip_unit,
-                    touches_amount, validate_edits)
+                    PROTECTED_NOTE, touches_amount, validate_edits)
 
 NO_HWP = "한글 문서를 열어 주세요"
 MAX_LINES = 80
@@ -33,7 +33,7 @@ class Tools:
         self.b = bridge
         self.s = Path(session_path)
         self.scoped = scoped  # 그림을 첨부한 요청: 그림 부분만 (위치 없는 수정 거부, 문서 전체 점검 안 함)
-        self.personal = personal  # 사용자가 패널에서 이번 요청만 개인정보 수정을 허용함
+        self.personal = personal  # 사용자가 패널에서 이번 요청만 보호 해제를 허용함 (개인정보·표 줄 삭제/추가)
 
     def _check(self, text: str, note: str) -> dict:
         text = resolve_text(text, self.b.read_text())  # 띄어쓰기가 달라도 문서의 실제 문구로 표시
@@ -134,6 +134,30 @@ class Tools:
     def mark_check(self, text: str, note: str) -> dict:
         return self._check(text, note)
 
+    @_safe
+    def edit_table_rows(self, rows: list[dict]) -> dict:
+        """표 줄 지우기·추가. 표 모양을 바꾸므로 사용자가 패널에서 허락한 요청에서만 (아니면 패널이 허락을 묻는다)."""
+        if not self.personal:
+            return {"done": [], "checks": [self._check(r.get("find", ""), f"{PROTECTED_NOTE}: 표 줄 삭제·추가는 사용자 허락이 필요함")
+                                           for r in rows[:1]]}
+        done, failed = [], []
+        for r in rows:  # 지우면 아래 줄 번호가 바뀌므로 받은 순서대로, 매번 문서를 새로 읽어 위치를 찾는다
+            doc = self.b.read_text()
+            find = resolve_text(r.get("find", ""), doc)
+            nths, _ = self._target(find, r.get("lines"), doc)
+            why = None if find else "find가 비어 있음"
+            if nths == ():
+                why = "지정한 줄에 없음"
+            until = resolve_text(r.get("until", ""), doc) if r.get("until") else ""
+            u_nths, _ = self._target(until, r.get("until_lines"), doc) if until else (None, ())
+            why = why or self.b.table_rows(r.get("action", ""), find, (nths or (0,))[0], int(r.get("count", 1)),
+                                           until, (u_nths or (0,))[0], bool(r.get("to_end")))
+            item = {"action": r.get("action"), "find": find, "count": int(r.get("count", 1)), "until": until}
+            (failed if why else done).append({**item, "error": why} if why else item)
+            if not why:
+                session.write(self.s, "rows", item)
+        return {"done": done, "failed": failed}
+
 
 def main() -> None:
     from mcp.server.fastmcp import FastMCP
@@ -188,6 +212,18 @@ def main() -> None:
     def mark_check(text: str, note: str) -> dict:
         """바꾸지 않았지만 사용자가 확인해야 할 문구를 빨간 형광펜으로 표시."""
         return t.mark_check(text, note)
+
+    @mcp.tool()
+    @connected
+    def edit_table_rows(rows: list[dict]) -> dict:
+        """표 줄 지우기·추가. rows = [{"action": "delete" 또는 "insert_below", "find": 그 줄의 칸에 있는 글, "lines": [줄번호],
+        "until": 마지막으로 지울 줄의 칸 글, "until_lines": [줄번호], "to_end": true, "count": 몇 줄}].
+        "~부터 마지막 줄까지"는 to_end: true (표의 마지막 줄은 패널이 직접 찾는다).
+        delete: find가 든 줄부터 until이 든 줄까지 지운다. **여러 줄을 지울 땐 count를 세지 말고 until을 쓴다**(표는 칸마다 한 줄이라 줄 수를 세면 틀림).
+        insert_below: find가 든 줄 아래에 빈 줄 count개.
+        여러 곳이면 위에서부터가 아니라 **아래쪽 줄부터** 적는다(지운 뒤 위치가 밀리지 않게).
+        사용자 허락([보호 해제 허용])이 없는 요청이면 바뀌지 않고 checks로 돌아온다 — 그때는 답변을 [[권한 확인]] 한 줄로."""
+        return t.edit_table_rows(rows)
 
     mcp.run()
 

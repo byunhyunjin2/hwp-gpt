@@ -33,6 +33,8 @@
 - 한글 문단 모양 `HParaShape.BreakNonLatinWord`: **0 = 어절, 1 = 글자(새 문서 기본값)** — 글자면 단어가 줄 끝에서 갈라짐 (2026-10-25 시험: 줄 끝 위치로 확인. 창이 숨어 있으면 줄 위치가 계산되지 않아 `Visible=True` 필요)
 - 고친 문단 정리는 글머리가 같은 이웃만 따라 함 — 글머리 없는 문단은 제목·본문을 구별할 수 없어 정렬을 건드리지 않음. ↶ 되돌리기는 글만 되돌리고 문단 모양은 그대로
 - 설치 파일: 다른 화면을 다 꺼도(`DisableReadyPage=yes`) Inno가 '설치 준비 완료'를 띄움 → 업데이트일 때는 `ShouldSkipPage(wpReady)`로 건너뜀. 설치된 버전은 HKCU 제거 목록 `{AppId}_is1`의 `DisplayVersion`. 패널이 켜져 있으면 '응용 프로그램 자동 닫기' 화면이 잠깐 나오지만 `CloseApplications=force`라 그대로 진행 (2026-10-25 1.0.5→1.0.6 직접 실행 시험)
+- 한글 표 줄: `TableDeleteRow`(커서 칸의 줄 지우기)·`TableInsertLowerRow`(아래에 줄 넣기). 표 안인지는 `ParentCtrl.CtrlID == "tbl"`, 칸 주소는 `KeyIndicator()` 마지막 값 "(A3): …", 열의 맨 아래 칸은 `TableColPageDown`
+- 형광펜 있는지 확인: `GetTextFile("HWPML2X")`의 `<MARKPENBEGIN` (HTML 내보내기에는 안 나옴). 표 전체 칸 선택: 표 앞(`GetAnchorPos`) → `FindCtrl` → `ShapeObjTableSelCell` → `TableCellBlockExtend` 두 번
 - 패널 창은 `hidden=True`로 만들고 `_dock_loop`가 오른쪽에 둔 뒤 `window.show()` (2026-10-25 실제 창 시험: 숨긴 창도 FindWindow로 찾히고, 옮긴 자리 그대로 보임)
 - 옆에 붙이기: 맞닿은 경계를 패널·한글 어느 쪽에서 끌어도 다른 쪽이 맞춰짐. 패널 자리는 놓은 뒤 실제 자리를 다시 읽어 기억 (DPI 반올림으로 1px 어긋나도 사용자가 끈 것으로 오해하지 않게)
 - 되돌리기: 한글 `GetPos()`로 바꾼 자리를 기록, 거꾸로 `SetPos` → `MoveSelRight` → 글 확인(`GetTextFile("UNICODE","saveblock")`) → 원래 글. **`MarkPenDelete`는 선택을 풀어 버림** → 원래 글을 넣은 뒤 다시 선택해서 지움

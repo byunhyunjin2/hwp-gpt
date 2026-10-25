@@ -262,8 +262,8 @@ class Api:
                 if a.get("count"):
                     a["id"] = uuid.uuid4().hex[:8]
                     self._log[a["id"]] = a
-            ask = not personal and (cr.PERSONAL_ASK in r.reply or any(c.get("note", "").startswith(PROTECTED_NOTE) for c in r.checks))
-            return {"reply": r.reply.replace(cr.PERSONAL_ASK, "").strip(), "changes": r.applied, "checks": r.checks,
+            ask = not personal and (cr.asks_permission(r.reply) or any(c.get("note", "").startswith(PROTECTED_NOTE) for c in r.checks))
+            return {"reply": cr.strip_permission(r.reply), "changes": r.applied, "checks": r.checks,
                     "askPersonal": ask,
                     "docType": self._doc_type, "error": r.error, "usage": r.usage,
                     "candidates": self._pop_candidates(), "attachNotes": notes}
@@ -339,6 +339,17 @@ class Api:
             return self._bridge.clear_marks()
         except HwpNotAvailable:
             return 0
+
+    def clear_all_marks(self) -> dict:
+        """윗줄 [🖍]: 문서의 형광펜 전부 (남은 표시·직접 칠한 것 포함). 요청 처리 중엔 안 함."""
+        if not self._busy.acquire(blocking=False):
+            return {"error": "요청 처리가 끝난 뒤 눌러 주세요"}
+        try:
+            return {"cleared": self._bridge.clear_all_marks()}
+        except HwpNotAvailable:
+            return {"error": "한글 문서를 열어 주세요"}
+        finally:
+            self._busy.release()
 
     # --- 기억 ---
     def memory_list(self, doc_type: str | None = None) -> list[str]:

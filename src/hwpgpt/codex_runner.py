@@ -207,15 +207,27 @@ def progress_of(e: dict) -> tuple[int, str] | None:
         return 10, "요청을 이해하는 중"
     if kind == "mcp_tool_call" and tool in READ_TOOLS:
         return (25, "문서에서 고칠 곳 찾는 중") if t == "item.started" else (45, "고칠 내용 정하는 중")
-    if kind == "mcp_tool_call" and tool == "apply_edits":
+    if kind == "mcp_tool_call" and tool in ("apply_edits", "edit_table_rows"):
         return (60, "한글 문서 고치는 중") if t == "item.started" else (85, "고친 결과 확인하는 중")
     if kind == "agent_message" or t == "turn.completed":
         return 95, "답변 정리 중"
     return None
 
 
-PERSONAL_ASK = "[[개인정보 확인]]"  # AI가 개인정보 수정 요청을 받으면 고치지 않고 이것만 답함 → 패널이 사용자에게 확인
-PERSONAL_OK = "[개인정보 수정 허용] 사용자가 패널에서 확인함: 이번 요청에 한해 요청한 개인정보(이름·학번·연락처 등)를 고친다. 요청하지 않은 개인정보는 그대로 둔다."
+# AI가 보호된 부분(개인정보·표 줄 삭제/추가)을 고쳐 달라는 요청을 받으면 고치지 않고 이것만 답함 → 패널이 사용자에게 확인
+PERMISSION_ASKS = ("[[권한 확인]]", "[[개인정보 확인]]")
+PERSONAL_OK = ("[보호 해제 허용] 사용자가 패널에서 확인함: 이번 요청에 한해 보호된 부분(이름·학번·연락처 같은 개인정보, "
+               "표 줄 지우기·추가)도 요청대로 고친다. 요청하지 않은 곳은 그대로 둔다.")
+
+
+def asks_permission(reply: str) -> bool:
+    return any(t in reply for t in PERMISSION_ASKS)
+
+
+def strip_permission(reply: str) -> str:
+    for t in PERMISSION_ASKS:
+        reply = reply.replace(t, "")
+    return reply.strip()
 
 
 def compose_prompt(user_text: str, memory_rules: list[str], attached: str = "", scoped: bool = False,

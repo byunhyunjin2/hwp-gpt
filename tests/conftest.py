@@ -49,6 +49,10 @@ class FakeBridge:
                     ok += 1
         return ok, 0
 
+    def table_rows(self, action, find, nth=0, count=1, until="", until_nth=0, to_end=False):
+        self.rows = getattr(self, "rows", []) + [(action, find, until, to_end)]
+        return None if find in self.text else "표 칸 안의 글을 찾지 못함"
+
     def unmark(self, texts):
         self.unmarked = list(texts)
 

@@ -166,3 +166,16 @@ def test_personal_edit_blocked_until_user_allows(tmp_path, fake_bridge):
     assert out["applied"] == [] and out["checks"][0]["note"].startswith("보호 대상")
     out = Tools(fake_bridge, tmp_path / "b.jsonl", personal=True).apply_edits([{"find": "홍길동", "replace": "이영희"}])
     assert out["applied"][0]["count"] == 1 and "이영희 010-0000-0000" in fake_bridge.text
+
+
+def test_table_rows_need_permission(tmp_path, fake_bridge):
+    from hwpgpt.tools_server import Tools
+
+    fake_bridge.text = "이름\r\n홍길동\r\n김철수"
+    out = Tools(fake_bridge, tmp_path / "a.jsonl").edit_table_rows([{"action": "delete", "find": "김철수", "to_end": True}])
+    assert out["done"] == [] and out["checks"][0]["note"].startswith("보호 대상")
+    assert not hasattr(fake_bridge, "rows")  # 허락 없으면 한글에 손대지 않음
+    out = Tools(fake_bridge, tmp_path / "b.jsonl", personal=True).edit_table_rows(
+        [{"action": "delete", "find": "김철수", "to_end": True}, {"action": "delete", "find": "없는글"}])
+    assert [d["find"] for d in out["done"]] == ["김철수"] and out["failed"][0]["error"]
+    assert fake_bridge.rows[0] == ("delete", "김철수", "", True)

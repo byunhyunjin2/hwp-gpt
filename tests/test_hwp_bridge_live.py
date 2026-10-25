@@ -161,3 +161,53 @@ def test_edit_matches_neighbor_bullet_shape_and_breaks_by_word(bridge):
     assert bridge.apply([Edit("OO구", "OO구 평생학습관", "")])[0][1] == 1
     assert _shape(bridge, 1) == before[:3] + (0,)  # 이웃과 같은 모양, 어절 단위 줄 나눔
     assert _shape(bridge, 2)[1:3] == (0, 0)  # 안 고친 문단은 그대로
+
+
+def _make_table(bridge, cells, cols=2):
+    def do(h):
+        h.HAction.Run("MoveDocEnd")
+        bridge._insert(h, "\r\n")
+        t = h.HParameterSet.HTableCreation
+        h.HAction.GetDefault("TableCreate", t.HSet)
+        t.Rows, t.Cols = len(cells) // cols, cols
+        h.HAction.Execute("TableCreate", t.HSet)
+        for c in cells:
+            bridge._insert(h, c)
+            h.HAction.Run("TableRightCell")
+        h.HAction.Run("MoveDocEnd")
+    bridge._call(do)
+
+
+def test_table_rows_delete_and_insert(bridge):
+    _make_table(bridge, ["이름", "번호", "홍길동", "1", "김철수", "2", "이영희", "3", "박민수", "4"])
+    assert bridge.table_rows("delete", "김철수", count=2) is None  # 김철수·이영희 줄
+    text = bridge.read_text()
+    assert "홍길동" in text and "박민수" in text and "김철수" not in text and "이영희" not in text
+    assert bridge.table_rows("insert_below", "홍길동") is None
+    assert bridge.read_text().count("\r\n") == text.count("\r\n") + 2  # 빈 칸 2개(한 줄)
+    assert bridge.table_rows("delete", "2026년") == "표 칸 안의 글을 찾지 못함"  # 본문 글은 거부
+
+
+def test_table_rows_delete_until_counts_rows_itself(bridge):
+    _make_table(bridge, ["이름", "번호", "홍길동", "1", "김철수", "2", "이영희", "3", "박민수", "4", "최수진", "5"])
+    assert bridge.table_rows("delete", "이영희", until="최수진") is None  # 3줄 — 줄 수는 칸 주소로 셈
+    text = bridge.read_text()
+    assert "김철수" in text and not any(n in text for n in ("이영희", "박민수", "최수진"))
+
+
+def test_table_rows_delete_to_end(bridge):
+    _make_table(bridge, ["이름", "번호", "홍길동", "1", "김철수", "2", "이영희", "3", "박민수", "4"])
+    assert bridge.table_rows("delete", "김철수", to_end=True) is None
+    text = bridge.read_text()
+    assert "홍길동" in text and not any(n in text for n in ("김철수", "이영희", "박민수"))
+
+
+def test_clear_all_marks_body_and_every_table(bridge):
+    _make_table(bridge, ["항목", "금액", "재료비", "100"])
+    _make_table(bridge, ["이름", "번호", "홍길동", "1"])
+    def marks():
+        return bridge._call(lambda h: h.GetTextFile("HWPML2X", "").count("<MARKPENBEGIN"))
+    for w in ("재료비", "홍길동"):  # 표 두 개의 칸 (본문 전체 선택으로는 표 칸까지 안 지워짐)
+        bridge._user_markpen(w)
+    assert marks() == 2
+    assert bridge.clear_all_marks() == 2 and marks() == 0

@@ -157,5 +157,5 @@ def test_attached_text_is_marked_as_reference():
 def test_personal_permission_is_told_to_ai_and_tool_server_per_request(monkeypatch, tmp_path):
     import hwpgpt.codex_runner as cr
 
-    assert cr.compose_prompt("명단 고쳐줘", [], personal=True).startswith("[개인정보 수정 허용]")
+    assert cr.compose_prompt("명단 고쳐줘", [], personal=True).startswith("[보호 해제 허용]")
     assert cr.compose_prompt("명단 고쳐줘", []) == "명단 고쳐줘"

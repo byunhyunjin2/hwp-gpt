@@ -181,7 +181,7 @@ def test_send_asks_before_personal_edit_and_allows_once(tmp_path, monkeypatch, f
 
     def fake_turn(text, rules, tid, personal=False, **k):
         seen.append(personal)
-        reply = "이영희로 바꿨습니다" if personal else cr.PERSONAL_ASK
+        reply = "이영희로 바꿨습니다" if personal else "[[권한 확인]]"
         return cr.TurnResult(reply, [], [], "t1", {}, None)
 
     monkeypatch.setattr(cr, "run_turn", fake_turn)
