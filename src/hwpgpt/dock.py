@@ -5,7 +5,15 @@ from typing import Callable
 
 Rect = tuple[int, int, int, int]  # left, top, right, bottom
 MIN_HWP_W = 400
-MIN_PANEL_W = 320  # 패널 창 min_size와 같게
+MIN_PANEL_W = 320  # 패널 창 min_size와 같게 (둘 다 100% 배율 기준 — 실제 픽셀은 dpi_scale을 곱함)
+
+
+def dpi_scale(hwnd: int) -> float:
+    """화면 배율 (100% = 1.0, 150% = 1.5). pywebview는 창 크기·최소 크기를 이만큼 키우므로
+    패널 폭(380)도 곱해야 한다 — 안 곱하면 150%에서 최소 폭 480이 380 자리에 들어가 화면 밖으로 밀림 (2026-10-25)."""
+    import ctypes
+
+    return (ctypes.windll.user32.GetDpiForWindow(hwnd) or 96) / 96
 
 
 def dock_layout(work_area: Rect, panel_w: int = 380) -> tuple[Rect, Rect]:
@@ -16,14 +24,14 @@ def dock_layout(work_area: Rect, panel_w: int = 380) -> tuple[Rect, Rect]:
 
 
 def follow_layout(hwp: Rect, hwp_last: Rect | None, pnl: Rect, placed: Rect | None, work: Rect,
-                  w: int) -> tuple[Rect | None, Rect, int]:
+                  w: int, min_w: int = MIN_PANEL_W) -> tuple[Rect | None, Rect, int]:
     """따라다니기 한 번: (한글을 옮길 자리 또는 None, 패널 자리, 패널 폭). placed = 지난번 패널 자리.
     둘이 붙어 있을 때 맞닿은 경계를 어느 쪽에서 끌든 다른 쪽이 같이 줄고 늘어난다."""
     if placed and pnl[2] == placed[2] and pnl[0] != placed[0]:  # 패널 왼쪽 끝을 끌어 폭을 바꿈 → 한글 오른쪽을 맞춤
         r = max(hwp[0] + MIN_HWP_W, pnl[0])
         return (hwp[0], hwp[1], r, hwp[3]), (r, hwp[1], pnl[2], hwp[3]), pnl[2] - r
     if (hwp_last and placed and hwp[0] == hwp_last[0] and hwp[2] != hwp_last[2] and placed[0] == hwp_last[2]
-            and placed[2] - hwp[2] >= MIN_PANEL_W):  # 한글 오른쪽 끝을 끌면 패널 폭이 바뀜 (패널 오른쪽은 그대로)
+            and placed[2] - hwp[2] >= min_w):  # 한글 오른쪽 끝을 끌면 패널 폭이 바뀜 (패널 오른쪽은 그대로)
         return None, (hwp[2], hwp[1], placed[2], hwp[3]), placed[2] - hwp[2]
     p = (hwp[2], hwp[1], hwp[2] + w, hwp[3])  # 옮기면 오른쪽에 딱 붙어 따라감
     if p[2] > work[2]:  # 화면 오른쪽 끝이라 옆에 못 붙으면 한글 안쪽 오른쪽에 겹쳐 둠
@@ -61,7 +69,8 @@ def place_right(hwnd: int, panel_w: int = 380) -> None:
     """한글이 아직 없을 때: 패널을 붙을 자리(화면 오른쪽 끝, 위아래 꽉)에 미리 둔다."""
     import win32con
 
-    _place_visible(hwnd, dock_layout(_work_area(hwnd), panel_w)[1], win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+    w = round(panel_w * dpi_scale(hwnd))
+    _place_visible(hwnd, dock_layout(_work_area(hwnd), w)[1], win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
 
 
 def embed_rect(edit: Rect, panel_w: int = 380, scrollbar: int = 18, min_doc: int = 300) -> tuple[int, int, int, int]:
@@ -109,7 +118,8 @@ class Docker:
     def __init__(self, panel_hwnd: int, on_hwp_gone: Callable[[], None], panel_w: int = 380) -> None:
         self.panel = panel_hwnd
         self.on_gone = on_hwp_gone
-        self.w = panel_w
+        scale = dpi_scale(panel_hwnd)
+        self.w, self.min_w = round(panel_w * scale), round(MIN_PANEL_W * scale)
         self.hwp: int | None = None
         self._orig: Rect | None = None
         self._stop = threading.Event()
@@ -165,7 +175,7 @@ class Docker:
             rect, pnl = _visible_rect(self.hwp), _visible_rect(self.panel)
             if rect == last and pnl == placed:
                 continue
-            new_hwp, p, self.w = follow_layout(rect, last, pnl, placed, _work_area(self.hwp), self.w)
+            new_hwp, p, self.w = follow_layout(rect, last, pnl, placed, _work_area(self.hwp), self.w, self.min_w)
             if new_hwp and new_hwp != rect:
                 _place_visible(self.hwp, new_hwp, win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
                 rect = _visible_rect(self.hwp)
@@ -196,7 +206,7 @@ class EmbedDocker:
     def __init__(self, panel_hwnd: int, on_hwp_gone: Callable[[], None], panel_w: int = 380) -> None:
         self.panel = panel_hwnd
         self.on_gone = on_hwp_gone
-        self.w = panel_w
+        self.w = round(panel_w * dpi_scale(panel_hwnd))
         self.hwp: int | None = None
         self._style: int | None = None
         self._stop = threading.Event()

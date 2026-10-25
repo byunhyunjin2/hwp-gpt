@@ -50,3 +50,9 @@ def test_moving_hwp_panel_follows_with_same_width():
 
     hwp, pnl = dock_layout(WORK)
     assert follow_layout((100, 50, 1000, 900), hwp, pnl, pnl, WORK, 380) == (None, (1000, 50, 1380, 900), 380)
+
+
+def test_scaled_panel_fits_screen_at_150_percent():
+    # 150%: pywebview 최소 폭 320×1.5 = 480. 패널 폭도 380×1.5 = 570으로 잡아야 화면 안에 들어감
+    hwp, pnl = dock_layout((0, 0, 1920, 1040), round(380 * 1.5))
+    assert pnl == (1350, 0, 1920, 1040) and pnl[2] - pnl[0] >= 480
