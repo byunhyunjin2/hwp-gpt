@@ -57,6 +57,13 @@ def _place_visible(hwnd: int, visible: Rect, flags: int) -> None:
     win32gui.SetWindowPos(hwnd, 0, l, t, r - l, b - t, flags)
 
 
+def place_right(hwnd: int, panel_w: int = 380) -> None:
+    """한글이 아직 없을 때: 패널을 붙을 자리(화면 오른쪽 끝, 위아래 꽉)에 미리 둔다."""
+    import win32con
+
+    _place_visible(hwnd, dock_layout(_work_area(hwnd), panel_w)[1], win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+
+
 def embed_rect(edit: Rect, panel_w: int = 380, scrollbar: int = 18, min_doc: int = 300) -> tuple[int, int, int, int]:
     """한글 안에 넣을 때 패널 위치 (x, y, w, h). edit = 문서 영역(한글 클라이언트 좌표).
     문서 영역 오른쪽, 세로 스크롤바 왼쪽. 문서가 min_doc만큼은 보이게 패널을 좁힌다."""

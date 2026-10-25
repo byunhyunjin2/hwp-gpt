@@ -10,7 +10,7 @@ from pathlib import Path
 from . import codex_runner as cr
 from . import __version__, attachments, paths, updater
 from .com_worker import ComWorker
-from .dock import Docker, EmbedDocker, find_hwp_window
+from .dock import Docker, EmbedDocker, find_hwp_window, place_right
 from .hwp_bridge import RED, HwpBridge, HwpNotAvailable
 from .memory import MemoryStore
 from .rules import AMOUNT_NOTES, PROTECTED_NOTE, amount_checks, changed_years, leftover_years, resolve_text, touches_amount
@@ -383,6 +383,13 @@ def _dock_loop(api: Api, stop: threading.Event) -> None:
         panel = win32gui.FindWindow(None, TITLE)
         stop.wait(0.3)
     api._panel_hwnd = panel
+    if panel and api._mode == "dock":  # 처음 뜰 때부터 붙을 자리(오른쪽)에 — 숨긴 채 옮긴 뒤 보여 줌
+        try:
+            place_right(panel)
+        finally:
+            api._window.show()
+    elif panel:
+        api._window.show()
     gone = threading.Event()
 
     def make():
@@ -432,7 +439,7 @@ def main() -> None:
     api = Api()
     stop = threading.Event()
     api._window = webview.create_window(TITLE, url=str(UI), js_api=api, width=380, height=900,
-                                       min_size=(320, 400))
+                                       min_size=(320, 400), hidden=True)  # _dock_loop가 오른쪽에 둔 뒤 보여 줌
     api._window.events.loaded += lambda: _wire_drop(api._window)
     t = threading.Thread(target=_dock_loop, args=(api, stop), daemon=True)
     t.start()

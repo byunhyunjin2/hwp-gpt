@@ -84,6 +84,7 @@ def download(info: dict, on_progress: Callable[[int], None] = lambda pct: None) 
 
 
 def run_installer(setup: Path) -> None:
-    """조용히 설치하고 끝나면 패널을 다시 띄운다(설치 파일의 [Run]). 패널은 이 직후 스스로 닫는다."""
-    subprocess.Popen([str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
+    """묻지 않고 설치하고 끝나면 패널을 다시 띄운다(설치 파일의 [Run]). 패널은 이 직후 스스로 닫는다.
+    /SILENT: 질문 없이 설치 진행 막대만 보여 줌 (패널이 닫힌 동안 진행 상황이 보이게)."""
+    subprocess.Popen([str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
                      creationflags=0x00000008 | 0x00000200)  # DETACHED_PROCESS | NEW_PROCESS_GROUP

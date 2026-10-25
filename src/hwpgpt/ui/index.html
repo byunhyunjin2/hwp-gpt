@@ -77,6 +77,10 @@
              padding: 24px; flex: 1; color: var(--muted); }
   .overlay.show { display: flex; }
   .overlay h3 { color: var(--text); margin: 0; }
+  .updbar { display: none; padding: 8px 12px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; }
+  .updbar.show { display: block; }
+  .updbar .bar { height: 6px; margin-top: 4px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .updbar .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
   footer { padding: 10px; background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 6px; }
   #attach { padding: 4px 8px; align-self: stretch; }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px; background: var(--panel); }
@@ -128,6 +132,7 @@
 
 <main id="log" aria-live="polite"></main>
 <div class="chips" id="chips"></div>
+<div class="updbar" id="updbar" role="status" aria-live="polite"><span id="updtext"></span><div class="bar"><i id="updfill"></i></div></div>
 <footer>
   <button id="attach" title="파일 첨부: 그림·사진, 워드, 파워포인트, 한글(hwp·hwpx), 글 파일" aria-label="파일 첨부">📎</button>
   <textarea id="input" placeholder="예: 올해(2027학년도) 걸로 바꿔줘" aria-label="요청"></textarea>
@@ -229,13 +234,16 @@ function showUpdate(u) {
   ok.onclick = async () => {
     if (busy) { say("err", "요청 처리가 끝난 뒤 업데이트해 주세요"); return; }
     ok.disabled = later.disabled = true;
-    const line = el("div", "notes", "업데이트 받는 중… 0%");
-    card.append(line);
-    const tick = setInterval(async () => { const p = await api.progress(); line.textContent = `업데이트 받는 중… ${p.pct}%`; }, 1000);
+    card.remove();  // 진행 상황은 아래쪽 막대에
+    const bar = $("updbar"), show = (pct, text) => { $("updtext").textContent = text; $("updfill").style.width = pct + "%"; };
+    bar.classList.add("show"); show(0, `새 버전 ${u.latest} 받는 중… 0%`);
+    const tick = setInterval(async () => {
+      try { const p = await api.progress(); show(p.pct, `새 버전 ${u.latest} 받는 중… ${p.pct}%`); } catch (e) { /* 다음 주기에 */ }
+    }, 500);
     const r = await api.apply_update();
     clearInterval(tick);
-    if (r.ok) line.textContent = "설치 중입니다. 패널이 잠시 닫혔다가 새 버전으로 다시 열립니다.";
-    else { line.textContent = r.error; ok.disabled = later.disabled = false; }
+    if (r.ok) show(100, "받기 100% · 설치 중 — 패널이 잠시 닫히고 설치 진행 창이 뜬 뒤 새 버전으로 다시 열립니다.");
+    else { bar.classList.remove("show"); say("err", r.error); showUpdate(u); }
   };
   later.onclick = () => card.remove();
   row.append(ok, later); card.append(row);
