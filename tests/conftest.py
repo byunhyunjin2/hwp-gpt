@@ -40,6 +40,15 @@ class FakeBridge:
                     ok += 1
         return ok, 0
 
+    def redo(self, applied):
+        ok = 0
+        for a in applied:
+            for _, _, i in a["pos"]:
+                if self.text[i:i + len(a["find"])] == a["find"]:
+                    self.text = self.text[:i] + a["replace"] + self.text[i + len(a["find"]):]
+                    ok += 1
+        return ok, 0
+
     def unmark(self, texts):
         self.unmarked = list(texts)
 

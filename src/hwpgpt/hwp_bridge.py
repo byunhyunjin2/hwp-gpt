@@ -167,6 +167,34 @@ class HwpBridge:
 
         return self._call(do)
 
+    def redo(self, applied: list[dict]) -> tuple[int, int]:
+        """undo한 것을 다시 적용(노랑 표시 포함). 자리는 apply 때 순서대로 기록됐으니 앞에서부터.
+        그사이 사용자가 고친 자리는 건너뛴다. (다시 바꾼 수, 건너뛴 수)"""
+
+        def do(h):
+            ok = skipped = 0
+            for a in applied:
+                before = ok
+                for lst, para, p in a.get("pos") or []:
+                    h.SetPos(lst, para, p)
+                    for _ in range(len(a["find"])):
+                        h.HAction.Run("MoveSelRight")
+                    if h.GetTextFile("UNICODE", "saveblock").rstrip("\r\n") != a["find"]:
+                        h.HAction.Run("Cancel")
+                        skipped += 1
+                        continue
+                    self._insert(h, a["replace"])
+                    for _ in range(len(a["replace"])):
+                        h.HAction.Run("MoveSelLeft")
+                    self._markpen(h, YELLOW)
+                    h.HAction.Run("Cancel")
+                    ok += 1
+                if ok > before:
+                    self._marks[a["replace"]] = YELLOW
+            return ok, skipped
+
+        return self._call(do)
+
     def unmark(self, texts: list[str]) -> None:
         """이 글자들에 칠한 형광펜을 지운다 (되돌릴 때 그 요청의 확인 표시 정리)."""
 

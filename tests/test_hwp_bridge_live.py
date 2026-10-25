@@ -123,8 +123,12 @@ def test_apply_only_chosen_occurrence_then_undo_restores_exactly(bridge):
     (_, n2, pos2), = bridge.apply([Edit("2026년", "2027학년도", "")])  # 길이가 다른 수정도 섞어서
     assert n2 == 1
     done = [{"find": "6", "replace": "8", "pos": pos1}, {"find": "2026년", "replace": "2027학년도", "pos": pos2}]
+    after = bridge.read_text()
     assert bridge.undo(done) == (2, 0)
     assert bridge.read_text() == before
+    assert bridge.redo(done) == (2, 0)  # [↷] 다시 적용 → 수정 뒤 글과 같아짐
+    assert bridge.read_text() == after
+    assert bridge.undo(done) == (2, 0) and bridge.read_text() == before  # 몇 번이든 오갈 수 있음
 
 
 def test_undo_skips_spot_user_changed(bridge):

@@ -26,3 +26,27 @@ def test_outer_rect_adds_invisible_borders():
     from hwpgpt.dock import outer_rect
 
     assert outer_rect((0, 0, 1540, 1040), (7, 0, 7, 7)) == (-7, 0, 1547, 1047)
+
+
+def test_dragging_panel_left_edge_resizes_hwp():
+    from hwpgpt.dock import follow_layout
+
+    hwp, pnl = dock_layout(WORK)  # (0,0,1540,1040), (1540,0,1920,1040)
+    new_hwp, p, w = follow_layout(hwp, hwp, (1400, 0, 1920, 1040), pnl, WORK, 380)
+    assert new_hwp == (0, 0, 1400, 1040) and p == (1400, 0, 1920, 1040) and w == 520
+
+
+def test_dragging_hwp_right_edge_resizes_panel():
+    from hwpgpt.dock import follow_layout
+
+    hwp, pnl = dock_layout(WORK)
+    new_hwp, p, w = follow_layout((0, 0, 1600, 1040), hwp, pnl, pnl, WORK, 380)
+    assert new_hwp is None and p == (1600, 0, 1920, 1040) and w == 320
+    assert follow_layout((0, 0, 1700, 1040), hwp, pnl, pnl, WORK, 380)[1] == (1320, 0, 1700, 1040)  # 너무 좁아지면 겹침
+
+
+def test_moving_hwp_panel_follows_with_same_width():
+    from hwpgpt.dock import follow_layout
+
+    hwp, pnl = dock_layout(WORK)
+    assert follow_layout((100, 50, 1000, 900), hwp, pnl, pnl, WORK, 380) == (None, (1000, 50, 1380, 900), 380)

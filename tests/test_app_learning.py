@@ -162,5 +162,12 @@ def test_undo_item_restores_one_change_and_tells_ai(tmp_path, fake_bridge):
     assert a.undo_item("x") == {"restored": 1, "skipped": 0}  # 4.0 → 5.0 만 되돌림
     assert fake_bridge.text == "참여시간\r\n8\r\n만족도\r\n4.0"
     assert "error" in a.undo_item("x")  # 두 번은 안 됨
-    assert a._with_undo_note("다시").startswith("[참고: 사용자가 이 수정은 되돌림(원래 글로 돌아감): 4.0 → 5.0]")
+    assert a._with_undo_note("다시").startswith("[참고: 사용자가 패널에서 직접 한 일: 4.0 → 5.0 되돌림(원래 글로 돌아감)]")
     assert a._with_undo_note("또") == "또"  # 한 번만
+
+    assert a.redo_item("x") == {"restored": 1, "skipped": 0}  # [↷] 다시 적용
+    assert fake_bridge.text == "참여시간\r\n8\r\n만족도\r\n5.0"
+    assert "error" in a.redo_item("x")
+    assert "다시 적용" in a._with_undo_note("또")
+    a.undo_item("x"), a.redo_item("x")  # 알리기 전에 되돌렸다 다시 적용하면 알릴 것 없음
+    assert a._with_undo_note("또") == "또"

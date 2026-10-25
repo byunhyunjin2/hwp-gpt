@@ -271,26 +271,39 @@ class Api:
         notes, self._undone = self._undone, []
         if not (notes and self._thread_id):
             return text
-        return f"[참고: 사용자가 이 수정은 되돌림(원래 글로 돌아감): {', '.join(notes)}]\n" + text
+        return f"[참고: 사용자가 패널에서 직접 한 일: {', '.join(notes)}]\n" + text
 
     def undo_item(self, item_id: str) -> dict:
         """항목 옆 [↶]: 그 수정(같은 요청에서 바꾼 모든 자리)을 원래 글로. 그사이 사용자가 고친 자리는 건드리지 않는다."""
+        return self._toggle(item_id, undo=True)
+
+    def redo_item(self, item_id: str) -> dict:
+        """되돌린 항목의 [↷]: 그 수정을 다시 적용한다."""
+        return self._toggle(item_id, undo=False)
+
+    def _toggle(self, item_id: str, undo: bool) -> dict:
         rec = self._log.get(item_id)
-        if not rec:
-            return {"error": "되돌릴 수 없는 항목입니다 (다른 문서이거나 이미 되돌림)"}
+        if not rec or bool(rec.get("undone")) == undo:
+            return {"error": "이 항목은 지금 바꿀 수 없습니다 (다른 문서로 바뀌었거나 이미 처리됨)"}
         if not self._busy.acquire(blocking=False):
-            return {"error": "요청 처리가 끝난 뒤 되돌려 주세요"}
+            return {"error": "요청 처리가 끝난 뒤 눌러 주세요"}
         try:
-            restored, skipped = self._bridge.undo([rec])
-            self._snapshot = self._bridge.read_text()  # 되돌린 것을 '사용자가 직접 고친 것'으로 배우지 않게
+            done, skipped = (self._bridge.undo if undo else self._bridge.redo)([rec])
+            self._snapshot = self._bridge.read_text()  # 패널에서 한 것을 '사용자가 직접 고친 것'으로 배우지 않게
         except HwpNotAvailable:
             return {"error": "한글 문서를 열어 주세요"}
         finally:
             self._busy.release()
-        del self._log[item_id]
-        if restored:
-            self._undone.append(f"{rec['find']} → {rec['replace']}")
-        return {"restored": restored, "skipped": skipped}
+        if done:
+            rec["undone"] = undo
+            note = f"{rec['find']} → {rec['replace']} 되돌림(원래 글로 돌아감)"
+            if undo:
+                self._undone.append(note)
+            elif note in self._undone:  # AI에게 알리기 전에 다시 적용했으면 알릴 것 없음
+                self._undone.remove(note)
+            else:
+                self._undone.append(f"{rec['find']} → {rec['replace']} 다시 적용")
+        return {"restored": done, "skipped": skipped}
 
     def new_conversation(self) -> None:
         self._thread_id = None

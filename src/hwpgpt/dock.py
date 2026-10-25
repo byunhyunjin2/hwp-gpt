@@ -5,6 +5,7 @@ from typing import Callable
 
 Rect = tuple[int, int, int, int]  # left, top, right, bottom
 MIN_HWP_W = 400
+MIN_PANEL_W = 320  # 패널 창 min_size와 같게
 
 
 def dock_layout(work_area: Rect, panel_w: int = 380) -> tuple[Rect, Rect]:
@@ -12,6 +13,22 @@ def dock_layout(work_area: Rect, panel_w: int = 380) -> tuple[Rect, Rect]:
     wl, wt, wr, wb = work_area
     r = max(wl + MIN_HWP_W, wr - panel_w)
     return (wl, wt, r, wb), (r, wt, wr, wb)
+
+
+def follow_layout(hwp: Rect, hwp_last: Rect | None, pnl: Rect, placed: Rect | None, work: Rect,
+                  w: int) -> tuple[Rect | None, Rect, int]:
+    """따라다니기 한 번: (한글을 옮길 자리 또는 None, 패널 자리, 패널 폭). placed = 지난번 패널 자리.
+    둘이 붙어 있을 때 맞닿은 경계를 어느 쪽에서 끌든 다른 쪽이 같이 줄고 늘어난다."""
+    if placed and pnl[2] == placed[2] and pnl[0] != placed[0]:  # 패널 왼쪽 끝을 끌어 폭을 바꿈 → 한글 오른쪽을 맞춤
+        r = max(hwp[0] + MIN_HWP_W, pnl[0])
+        return (hwp[0], hwp[1], r, hwp[3]), (r, hwp[1], pnl[2], hwp[3]), pnl[2] - r
+    if (hwp_last and placed and hwp[0] == hwp_last[0] and hwp[2] != hwp_last[2] and placed[0] == hwp_last[2]
+            and placed[2] - hwp[2] >= MIN_PANEL_W):  # 한글 오른쪽 끝을 끌면 패널 폭이 바뀜 (패널 오른쪽은 그대로)
+        return None, (hwp[2], hwp[1], placed[2], hwp[3]), placed[2] - hwp[2]
+    p = (hwp[2], hwp[1], hwp[2] + w, hwp[3])  # 옮기면 오른쪽에 딱 붙어 따라감
+    if p[2] > work[2]:  # 화면 오른쪽 끝이라 옆에 못 붙으면 한글 안쪽 오른쪽에 겹쳐 둠
+        p = (hwp[2] - w, hwp[1], hwp[2], hwp[3])
+    return None, p, w
 
 
 def outer_rect(visible: Rect, margins: Rect) -> Rect:
@@ -128,7 +145,7 @@ class Docker:
         import win32con
         import win32gui
 
-        last = None
+        last = placed = None
         while not self._stop.wait(0.15):
             if not win32gui.IsWindow(self.hwp):
                 self.hwp = None
@@ -138,14 +155,17 @@ class Docker:
                 continue  # 소유 창이라 패널도 함께 숨겨짐
             if self._orig is None:  # 최소화 상태로 붙었다가 이제 복원됨
                 self._first_layout()
-            rect = _visible_rect(self.hwp)
-            if rect != last:  # 사용자가 한글을 옮기거나 크기를 바꾸면 패널이 오른쪽에 딱 붙어 따라감
-                last = rect
-                pnl = (rect[2], rect[1], rect[2] + self.w, rect[3])
-                if pnl[2] > _work_area(self.hwp)[2]:  # 화면 오른쪽 끝이라 옆에 못 붙으면 한글 안쪽 오른쪽에 겹쳐 둠
-                    pnl = (rect[2] - self.w, rect[1], rect[2], rect[3])
-                self._place(pnl)
-                win32gui.ShowWindow(self.panel, win32con.SW_SHOWNOACTIVATE)
+            rect, pnl = _visible_rect(self.hwp), _visible_rect(self.panel)
+            if rect == last and pnl == placed:
+                continue
+            new_hwp, p, self.w = follow_layout(rect, last, pnl, placed, _work_area(self.hwp), self.w)
+            if new_hwp and new_hwp != rect:
+                _place_visible(self.hwp, new_hwp, win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+                rect = _visible_rect(self.hwp)
+            if p != pnl:
+                self._place(p)
+            win32gui.ShowWindow(self.panel, win32con.SW_SHOWNOACTIVATE)
+            last, placed = rect, _visible_rect(self.panel)  # 실제 자리를 기억 (DPI 반올림으로 1px 어긋나도 다음에 오해하지 않게)
 
     def detach(self, restore: bool = True) -> None:
         import win32gui
