@@ -152,3 +152,10 @@ def test_attached_text_is_marked_as_reference():
     p = compose_prompt("이걸로 고쳐줘", [], "[첨부 파일: a.docx]\n내용")
     assert "고칠 대상은 열린 한글 문서" in p and p.endswith("[요청]\n이걸로 고쳐줘")
     assert compose_prompt("그냥", []) == "그냥"
+
+
+def test_personal_permission_is_told_to_ai_and_tool_server_per_request(monkeypatch, tmp_path):
+    import hwpgpt.codex_runner as cr
+
+    assert cr.compose_prompt("명단 고쳐줘", [], personal=True).startswith("[개인정보 수정 허용]")
+    assert cr.compose_prompt("명단 고쳐줘", []) == "명단 고쳐줘"

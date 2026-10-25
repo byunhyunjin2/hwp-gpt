@@ -171,3 +171,28 @@ def test_undo_item_restores_one_change_and_tells_ai(tmp_path, fake_bridge):
     assert "다시 적용" in a._with_undo_note("또")
     a.undo_item("x"), a.redo_item("x")  # 알리기 전에 되돌렸다 다시 적용하면 알릴 것 없음
     assert a._with_undo_note("또") == "또"
+
+
+def test_send_asks_before_personal_edit_and_allows_once(tmp_path, monkeypatch, fake_bridge):
+    import hwpgpt.app as app
+    import hwpgpt.codex_runner as cr
+
+    seen = []
+
+    def fake_turn(text, rules, tid, personal=False, **k):
+        seen.append(personal)
+        reply = "이영희로 바꿨습니다" if personal else cr.PERSONAL_ASK
+        return cr.TurnResult(reply, [], [], "t1", {}, None)
+
+    monkeypatch.setattr(cr, "run_turn", fake_turn)
+    monkeypatch.setattr(cr, "read_rate_limits", lambda t: None)
+    a = bare_api(tmp_path, fake_bridge)
+    a._connected = lambda: True
+    a._target, a._thread_id, a._settings, a._log, a._undone = "", None, {}, {}, []
+    a._progress, a._last_usage, a._limits = {}, None, None
+    fake_bridge.target_name = lambda: ""
+    fake_bridge.remember_marks = lambda *x: None
+    r = a.send("홍길동을 이영희로 바꿔줘")
+    assert r["askPersonal"] and r["reply"] == ""
+    r = a.send("홍길동을 이영희로 바꿔줘", [], True)
+    assert not r["askPersonal"] and seen == [False, True]

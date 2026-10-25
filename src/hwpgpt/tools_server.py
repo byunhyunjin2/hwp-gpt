@@ -29,10 +29,11 @@ def _safe(fn):
 
 
 class Tools:
-    def __init__(self, bridge, session_path: Path, scoped: bool = False) -> None:
+    def __init__(self, bridge, session_path: Path, scoped: bool = False, personal: bool = False) -> None:
         self.b = bridge
         self.s = Path(session_path)
         self.scoped = scoped  # 그림을 첨부한 요청: 그림 부분만 (위치 없는 수정 거부, 문서 전체 점검 안 함)
+        self.personal = personal  # 사용자가 패널에서 이번 요청만 개인정보 수정을 허용함
 
     def _check(self, text: str, note: str) -> dict:
         text = resolve_text(text, self.b.read_text())  # 띄어쓰기가 달라도 문서의 실제 문구로 표시
@@ -102,7 +103,7 @@ class Tools:
             nths, ctx = self._target(find, e.get("lines"), doc)
             items.append(Edit(find, e.get("replace", ""), e.get("reason", ""), nths, ctx))
             lines_of[id(items[-1])] = e.get("lines")
-        ok, rejected = validate_edits(doc, items, need_lines=self.scoped)
+        ok, rejected = validate_edits(doc, items, need_lines=self.scoped, personal=self.personal)
         applied = []
         for e, n, pos in self.b.apply(ok) if ok else []:
             if not n and strip_unit(e.find) and strip_unit(e.replace):  # 표 칸의 '원'이 떨어져 있으면 숫자만으로
@@ -141,7 +142,8 @@ def main() -> None:
     from .hwp_bridge import HwpBridge
 
     bridge = HwpBridge(ComWorker())
-    t = Tools(bridge, Path(os.environ.get("HWPGPT_SESSION", "session.jsonl")), os.environ.get("HWPGPT_SCOPED") == "1")
+    t = Tools(bridge, Path(os.environ.get("HWPGPT_SESSION", "session.jsonl")), os.environ.get("HWPGPT_SCOPED") == "1",
+              os.environ.get("HWPGPT_PERSONAL") == "1")
 
     def connected(fn):
         @functools.wraps(fn)

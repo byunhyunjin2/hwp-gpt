@@ -214,10 +214,15 @@ def progress_of(e: dict) -> tuple[int, str] | None:
     return None
 
 
-def compose_prompt(user_text: str, memory_rules: list[str], attached: str = "", scoped: bool = False) -> str:
-    if not memory_rules and not attached and not scoped:
+PERSONAL_ASK = "[[개인정보 확인]]"  # AI가 개인정보 수정 요청을 받으면 고치지 않고 이것만 답함 → 패널이 사용자에게 확인
+PERSONAL_OK = "[개인정보 수정 허용] 사용자가 패널에서 확인함: 이번 요청에 한해 요청한 개인정보(이름·학번·연락처 등)를 고친다. 요청하지 않은 개인정보는 그대로 둔다."
+
+
+def compose_prompt(user_text: str, memory_rules: list[str], attached: str = "", scoped: bool = False,
+                   personal: bool = False) -> str:
+    if not memory_rules and not attached and not scoped and not personal:
         return user_text
-    parts = []
+    parts = [PERSONAL_OK] if personal else []
     if scoped:  # 그림 첨부 = 고칠 범위 (사용자 결정 2026-10-22). 도구 서버도 위치 없는 수정을 거부한다
         parts.append("[범위] 첨부한 그림에 보이는 부분만 고친다. 문서의 다른 곳은 같은 글이 있어도 바꾸지 않는다. 수정마다 그 부분의 줄 번호(lines)를 준다.")
     if memory_rules:
@@ -260,15 +265,17 @@ def _stream(cmd: list[str], timeout: int, on_event) -> tuple[list[str], str, int
 
 def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = None,
              timeout: int = 600, on_progress=lambda pct, step: None, model: str | None = None,
-             images: list[str] = (), attached: str = "") -> TurnResult:
+             images: list[str] = (), attached: str = "", personal: bool = False) -> TurnResult:
     codex = find_codex()
     if not codex:
         return TurnResult("", [], [], None, {}, "missing")
     sess = paths.session_dir() / f"{uuid.uuid4().hex}.jsonl"
     server_cmd, server_env = tools_server_cmd()
-    scoped = {"HWPGPT_SCOPED": "1"} if images else {}
-    cmd = build_command(codex, compose_prompt(user_text, memory_rules, attached, bool(images)), server_cmd,
-                        {**server_env, "HWPGPT_SESSION": str(sess), **scoped}, thread_id, model, images)
+    flags = {"HWPGPT_SCOPED": "1"} if images else {}
+    if personal:  # 이번 요청만: 다음 요청의 도구 서버는 이 값 없이 다시 뜬다
+        flags["HWPGPT_PERSONAL"] = "1"
+    cmd = build_command(codex, compose_prompt(user_text, memory_rules, attached, bool(images), personal), server_cmd,
+                        {**server_env, "HWPGPT_SESSION": str(sess), **flags}, thread_id, model, images)
     def on_event(e: dict) -> None:
         if pr := progress_of(e):
             on_progress(*pr)

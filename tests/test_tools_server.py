@@ -156,3 +156,13 @@ def test_amount_checks_only_when_amounts_change(fake_bridge, tmp_path):
     out = Tools(fake_bridge, tmp_path / "s.jsonl").apply_edits(
         [{"find": "2026학년도", "replace": "2027학년도", "reason": "연도"}])
     assert out["checks"] == []  # 금액을 안 건드린 요청에 예산 불일치를 띄우지 않음
+
+
+def test_personal_edit_blocked_until_user_allows(tmp_path, fake_bridge):
+    from hwpgpt.tools_server import Tools
+
+    fake_bridge.text = "참석자 명단\r\n홍길동 010-0000-0000\r\n김철수 010-1111-1111"
+    out = Tools(fake_bridge, tmp_path / "a.jsonl").apply_edits([{"find": "홍길동", "replace": "이영희"}])
+    assert out["applied"] == [] and out["checks"][0]["note"].startswith("보호 대상")
+    out = Tools(fake_bridge, tmp_path / "b.jsonl", personal=True).apply_edits([{"find": "홍길동", "replace": "이영희"}])
+    assert out["applied"][0]["count"] == 1 and "이영희 010-0000-0000" in fake_bridge.text

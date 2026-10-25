@@ -117,8 +117,13 @@ def _paragraphs_with(doc_text: str, needle: str) -> list[str]:
     return hits or ([doc_text] if needle in doc_text else [])
 
 
-def validate_edits(doc_text: str, edits: list[Edit], need_lines: bool = False) -> tuple[list[Edit], list[Check]]:
-    """통과한 수정안과, 거부되어 확인(빨강)으로 돌릴 항목. need_lines: 그림을 첨부한 요청 — 위치 없는 수정은 모두 거부."""
+PROTECTED_NOTE = "보호 대상이라 바꾸지 않음"
+
+
+def validate_edits(doc_text: str, edits: list[Edit], need_lines: bool = False,
+                   personal: bool = False) -> tuple[list[Edit], list[Check]]:
+    """통과한 수정안과, 거부되어 확인(빨강)으로 돌릴 항목. need_lines: 그림을 첨부한 요청 — 위치 없는 수정은 모두 거부.
+    personal: 사용자가 패널에서 이번 요청에 한해 개인정보 수정을 허용함 — 보호 검사를 건너뜀."""
     ok: list[Edit] = []
     checks: list[Check] = []
     for e in edits:
@@ -131,13 +136,13 @@ def validate_edits(doc_text: str, edits: list[Edit], need_lines: bool = False) -
         if e.nths is None and is_vague(e.find):
             checks.append(Check(e.find, "짧은 문구라 문서 곳곳이 같이 바뀔 수 있어 바꾸지 않음 — 바꿀 줄 번호(lines)를 함께 주세요"))
             continue
-        reason = next(
+        reason = None if personal else next(
             (r for p in (e.context or _paragraphs_with(doc_text, e.find))
              if (r := is_protected(e.find, p))),
             None,
         )
         if reason:
-            checks.append(Check(e.find, f"보호 대상이라 바꾸지 않음: {reason}"))
+            checks.append(Check(e.find, f"{PROTECTED_NOTE}: {reason}"))
             continue
         bad = _weekday_problems(e.replace)
         if bad:

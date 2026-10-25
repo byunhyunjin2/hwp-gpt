@@ -13,7 +13,7 @@ from .com_worker import ComWorker
 from .dock import Docker, EmbedDocker, find_hwp_window
 from .hwp_bridge import RED, HwpBridge, HwpNotAvailable
 from .memory import MemoryStore
-from .rules import AMOUNT_NOTES, amount_checks, changed_years, leftover_years, resolve_text, touches_amount
+from .rules import AMOUNT_NOTES, PROTECTED_NOTE, amount_checks, changed_years, leftover_years, resolve_text, touches_amount
 
 TITLE = "HWP_GPT"
 UI = Path(__file__).resolve().parent / "ui" / "index.html"
@@ -225,7 +225,8 @@ class Api:
                                                  file_types=attachments.DIALOG_FILTER) or []
         return [{"path": p, "name": Path(p).name} for p in paths_]
 
-    def send(self, text: str, files: list[str] | None = None) -> dict:
+    def send(self, text: str, files: list[str] | None = None, personal: bool = False) -> dict:
+        """personal: 사용자가 '개인정보 수정 허용'을 눌러 다시 보낸 요청 — 이번 요청에서만 개인정보도 고친다."""
         if not text.strip():
             return {"error": "요청을 입력해 주세요"}
         if not self._busy.acquire(blocking=False):
@@ -239,7 +240,8 @@ class Api:
             self._progress = {"pct": 0, "step": "", "start": time.time()}
             images, attached, notes = attachments.prepare(files or [])
             r = cr.run_turn(self._with_undo_note(text), self._rules_for_prompt(), self._thread_id, on_progress=self._on_progress,
-                            model=self._settings.get("model") or None, images=images, attached=attached)
+                            model=self._settings.get("model") or None, images=images, attached=attached,
+                            personal=personal)
             pairs = [(a["find"], a["replace"]) for a in r.applied if a.get("count")]
             if not images:  # 그림을 첨부한 요청은 그 부분만 — 문서 전체 점검(옛 연도·금액)을 하지 않음
                 r.checks += self._leftover_checks(r.applied, r.checks)
@@ -260,7 +262,9 @@ class Api:
                 if a.get("count"):
                     a["id"] = uuid.uuid4().hex[:8]
                     self._log[a["id"]] = a
-            return {"reply": r.reply, "changes": r.applied, "checks": r.checks,
+            ask = not personal and (cr.PERSONAL_ASK in r.reply or any(c.get("note", "").startswith(PROTECTED_NOTE) for c in r.checks))
+            return {"reply": r.reply.replace(cr.PERSONAL_ASK, "").strip(), "changes": r.applied, "checks": r.checks,
+                    "askPersonal": ask,
                     "docType": self._doc_type, "error": r.error, "usage": r.usage,
                     "candidates": self._pop_candidates(), "attachNotes": notes}
         finally:

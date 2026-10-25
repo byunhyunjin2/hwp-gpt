@@ -360,12 +360,24 @@ document.addEventListener("dragleave", () => { document.body.classList.toggle("d
 document.addEventListener("dragover", (e) => e.preventDefault());
 document.addEventListener("drop", () => { dragDepth = 0; document.body.classList.remove("dropping"); });
 
-async function send() {
-  const text = $("input").value.trim();
+// 개인정보를 고치는 요청: 사용자가 확인해야 이번 요청에서만 고친다 (허용은 다음 요청으로 이어지지 않음)
+function askPersonal(text, sending) {
+  const card = el("div", "card");
+  card.append(el("div", null, "개인정보(이름·학번·연락처 등)를 고치는 요청입니다. 이번 요청에 한해 개인정보를 수정할 수 있게 하시겠어요?"));
+  const row = el("div", "row"), yes = el("button", "primary", "이번만 수정 허용"), no = el("button", null, "아니요");
+  yes.onclick = () => { if (busy) return; card.remove(); send({ text, sending, personal: true }); };
+  no.onclick = () => { card.remove(); say("ai", "개인정보는 바꾸지 않았습니다."); };
+  row.append(yes, no); card.append(row);
+  $("log").append(card); scrollDown(); yes.focus();
+}
+
+async function send(again) {
+  const text = again ? again.text : $("input").value.trim();
   if (!text || busy) return;
-  const sending = files; files = []; renderChips();
-  busy = true; $("input").value = ""; setOverlay(lastStatus);
-  const me = el("div", "msg me", text);
+  const sending = again ? again.sending : files;
+  if (!again) { files = []; renderChips(); $("input").value = ""; }
+  busy = true; setOverlay(lastStatus);
+  const me = el("div", "msg me", again ? "🔓 개인정보 수정 허용 — 다시 요청: " + text : text);
   if (sending.length) me.append(el("span", "files", "📎 " + sending.map((f) => f.name).join(", ")));
   $("log").append(me); scrollDown();
   const wait = el("div", "msg ai wait"), line = el("div", null, "작업 중 0% · ChatGPT에 요청 보내는 중"), bar = el("div", "bar");
@@ -379,7 +391,7 @@ async function send() {
     } catch (e) { /* 다음 주기에 */ }
   }, 1000);
   try {
-    const r = await api.send(text, sending.map((f) => f.path));
+    const r = await api.send(text, sending.map((f) => f.path), !!(again && again.personal));
     clearInterval(tick); wait.remove();
     for (const n of r.attachNotes || []) say("err", "첨부: " + n);
     if (r.error === "login") say("err", "ChatGPT 로그인이 필요합니다.");
@@ -388,12 +400,13 @@ async function send() {
     if (r.reply) sayReply(r.reply);
     renderChanges(r.changes || [], r.checks || []);
     for (const c of r.candidates || []) showCandidate(c.docType, c.rule);
+    if (r.askPersonal) askPersonal(text, sending);
   } catch (e) { clearInterval(tick); wait.remove(); say("err", "오류: " + e); }
   busy = false; refresh();
 }
 
 function wire() {
-  $("send").onclick = send;
+  $("send").onclick = () => send();
   $("attach").onclick = pickFiles;
   $("input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
   $("clearMarks").onclick = async () => { const n = await api.clear_marks(); say("ai", `형광펜 표시 ${n}곳을 지웠습니다.`); refresh(); };
