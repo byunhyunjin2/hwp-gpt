@@ -127,7 +127,8 @@ class Events:
 
 def _classify(msg: str) -> str:
     m = msg.lower()
-    if any(k in m for k in ("401", "unauthorized", "not logged in", "login")):
+    # 'login'만 보면 로그인과 상관없는 오류 문장도 로그아웃으로 오판함 (2026-11-11 점검)
+    if any(k in m for k in ("401", "unauthorized", "not logged in", "codex login", "log in again", "login required")):
         return "login"
     if any(k in m for k in ("usage limit", "rate limit", "429", "quota")):
         return "limit"
@@ -163,6 +164,7 @@ class TurnResult:
     usage: dict
     error: str | None
     thread_id: str | None = None
+    done: list[dict] = field(default_factory=list)  # 서식·표·넣기 (글 바꾸기 아닌 수정)
 
 
 def _find_key(obj, key):
@@ -197,7 +199,8 @@ def read_rate_limits(thread_id: str | None = None, home: Path | None = None) -> 
 
 
 # 진행률: Codex --json 이벤트 → (%, 단계). 뒤로 가지 않게 호출하는 쪽이 max를 쓴다.
-READ_TOOLS = ("find_lines", "read_document")
+READ_TOOLS = ("find_lines", "read_document", "read_table", "page_image", "compare_attachment")
+EDIT_TOOLS = ("apply_edits", "edit_table_rows", "format_text", "edit_table", "insert_content", "fill_fields")
 
 
 def progress_of(e: dict) -> tuple[int, str] | None:
@@ -207,7 +210,7 @@ def progress_of(e: dict) -> tuple[int, str] | None:
         return 10, "요청을 이해하는 중"
     if kind == "mcp_tool_call" and tool in READ_TOOLS:
         return (25, "문서에서 고칠 곳 찾는 중") if t == "item.started" else (45, "고칠 내용 정하는 중")
-    if kind == "mcp_tool_call" and tool in ("apply_edits", "edit_table_rows"):
+    if kind == "mcp_tool_call" and tool in EDIT_TOOLS:
         return (60, "한글 문서 고치는 중") if t == "item.started" else (85, "고친 결과 확인하는 중")
     if kind == "agent_message" or t == "turn.completed":
         return 95, "답변 정리 중"
@@ -236,7 +239,8 @@ def compose_prompt(user_text: str, memory_rules: list[str], attached: str = "", 
         return user_text
     parts = [PERSONAL_OK] if personal else []
     if scoped:  # 그림 첨부 = 고칠 범위 (사용자 결정 2026-10-22). 도구 서버도 위치 없는 수정을 거부한다
-        parts.append("[범위] 첨부한 그림에 보이는 부분만 고친다. 문서의 다른 곳은 같은 글이 있어도 바꾸지 않는다. 수정마다 그 부분의 줄 번호(lines)를 준다.")
+        parts.append("[범위] 첨부한 그림에 보이는 부분만 고친다. 문서의 다른 곳은 같은 글이 있어도 바꾸지 않는다. 수정마다 그 부분의 줄 번호(lines)를 준다. "
+                     "(그림을 문서에 넣어 달라는 요청이면 insert_content의 picture로 넣는다)")
     if memory_rules:
         parts.append("[이 사용자가 이 문서 종류에서 지켜 온 규칙]\n" + "\n".join(f"- {r}" for r in memory_rules))
     if attached:  # 참고 자료일 뿐, 고칠 대상은 열린 한글 문서
@@ -283,7 +287,10 @@ def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = No
         return TurnResult("", [], [], None, {}, "missing")
     sess = paths.session_dir() / f"{uuid.uuid4().hex}.jsonl"
     server_cmd, server_env = tools_server_cmd()
-    flags = {"HWPGPT_SCOPED": "1"} if images else {}
+    flags = {"HWPGPT_SCOPED": "1", "HWPGPT_FILES": os.pathsep.join(images)} if images else {}
+    if attached:  # 첨부 문서 비교(compare_attachment)용
+        sess.with_suffix(".attached.txt").write_text(attached, encoding="utf-8")
+        flags["HWPGPT_ATTACHED"] = str(sess.with_suffix(".attached.txt"))
     if personal:  # 이번 요청만: 다음 요청의 도구 서버는 이 값 없이 다시 뜬다
         flags["HWPGPT_PERSONAL"] = "1"
     cmd = build_command(codex, compose_prompt(user_text, memory_rules, attached, bool(images), personal), server_cmd,
@@ -308,4 +315,5 @@ def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = No
         checks=[x["data"] for x in rows if x["kind"] == "check"],
         doc_type=doc_types[-1] if doc_types else None,  # 여러 번 기록하면 마지막 값
         usage=ev.usage, error=ev.error, thread_id=ev.thread_id or thread_id,
+        done=[x["data"] for x in rows if x["kind"] == "done"],
     )

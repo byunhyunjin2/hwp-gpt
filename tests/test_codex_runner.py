@@ -159,3 +159,38 @@ def test_personal_permission_is_told_to_ai_and_tool_server_per_request(monkeypat
 
     assert cr.compose_prompt("명단 고쳐줘", [], personal=True).startswith("[보호 해제 허용]")
     assert cr.compose_prompt("명단 고쳐줘", []) == "명단 고쳐줘"
+
+
+def test_login_error_only_for_real_login_messages():
+    assert cr.parse_events(['{"type":"error","message":"Please run codex login"}']).error == "login"
+    # 'login' 낱말만 든 다른 오류를 로그아웃으로 오판하지 않음 (2026-11-11 점검)
+    msg = cr.parse_events(['{"type":"error","message":"tool failed: login.log not found"}']).error
+    assert msg != "login" and "login.log" in msg
+
+
+def test_run_turn_passes_attachments_and_returns_done(monkeypatch, tmp_path):
+    import json
+
+    from hwpgpt import paths, session
+
+    monkeypatch.setattr(cr, "find_codex", lambda: Path("codex.exe"))
+    monkeypatch.setattr(paths, "session_dir", lambda: tmp_path)
+    seen = {}
+
+    def fake_stream(cmd, timeout, on_event):
+        env = next(c for c in cmd if c.startswith("mcp_servers.hwpgpt.env="))
+        seen["env"] = env
+        sess = Path(json.loads(env.split('HWPGPT_SESSION=', 1)[1].split(",", 1)[0].rstrip("}")))
+        session.write(sess, "done", {"label": "서식(bold=True): 추진 배경", "at": "추진 배경", "marks": []})
+        seen["attached"] = sess.with_suffix(".attached.txt").read_text(encoding="utf-8")
+        return [], "", 0
+
+    monkeypatch.setattr(cr, "_stream", fake_stream)
+    r = cr.run_turn("넣어줘", [], images=["C:\a\사진.png"], attached="[첨부 파일: b.docx]\n글")
+    assert "HWPGPT_FILES" in seen["env"] and "사진.png" in seen["env"] and "HWPGPT_ATTACHED" in seen["env"]
+    assert seen["attached"].startswith("[첨부 파일: b.docx]")
+    assert r.done[0]["at"] == "추진 배경"
+
+
+def test_scoped_prompt_allows_inserting_the_attached_picture():
+    assert "insert_content의 picture" in cr.compose_prompt("이 사진 넣어줘", [], scoped=True)

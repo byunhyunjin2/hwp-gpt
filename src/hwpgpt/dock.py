@@ -97,7 +97,8 @@ def find_hwp_window() -> int | None:
     found: list[int] = []
 
     def cb(h, _):
-        if win32gui.IsWindowVisible(h) and win32gui.GetClassName(h).startswith(("HwndWrapper[Hwp.exe", "HwpFrame")):
+        # 실행 파일 이름 대소문자는 띄운 방법에 따라 다름 (COM으로 띄우면 'hwp.exe', 2026-11-11 확인)
+        if win32gui.IsWindowVisible(h) and win32gui.GetClassName(h).lower().startswith(("hwndwrapper[hwp.exe", "hwpframe")):
             found.append(h)
 
     win32gui.EnumWindows(cb, None)
@@ -250,6 +251,11 @@ class EmbedDocker:
                 last = rect
                 x, y, w, h = embed_rect(rect, self.w)
                 win32gui.SetWindowPos(self.panel, win32con.HWND_TOP, x, y, w, h, win32con.SWP_SHOWWINDOW)
+            elif win32gui.GetWindow(self.panel, win32con.GW_HWNDPREV):
+                # 한글이 자기 창을 패널 위로 올리면 겹친 부분(패널 왼쪽)이 가려짐 — 사용자 화면에서 보고됨(2026-10-22).
+                # 이 PC에선 재현 안 됨(2026-11-11: 창 폭·150% 흉내·클릭·스크롤) → 위에 형제 창이 생기면 바로 맨 위로
+                win32gui.SetWindowPos(self.panel, win32con.HWND_TOP, 0, 0, 0, 0,
+                                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
 
     def detach(self, restore: bool = True) -> None:
         import win32con

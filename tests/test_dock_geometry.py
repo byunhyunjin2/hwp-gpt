@@ -56,3 +56,16 @@ def test_scaled_panel_fits_screen_at_150_percent():
     # 150%: pywebview 최소 폭 320×1.5 = 480. 패널 폭도 380×1.5 = 570으로 잡아야 화면 안에 들어감
     hwp, pnl = dock_layout((0, 0, 1920, 1040), round(380 * 1.5))
     assert pnl == (1350, 0, 1920, 1040) and pnl[2] - pnl[0] >= 480
+
+
+def test_find_hwp_window_ignores_exe_name_case(monkeypatch):
+    """COM으로 띄운 한글은 창 클래스가 'HwndWrapper[hwp.exe;…' (소문자) — 못 찾아 패널이 안 붙었음 (2026-11-11)."""
+    import win32gui
+
+    from hwpgpt import dock
+
+    windows = {1: "HwndWrapper[hwp.exe;;abc]", 2: "Notepad"}
+    monkeypatch.setattr(win32gui, "EnumWindows", lambda cb, _: [cb(h, None) for h in windows])
+    monkeypatch.setattr(win32gui, "IsWindowVisible", lambda h: True)
+    monkeypatch.setattr(win32gui, "GetClassName", lambda h: windows[h])
+    assert dock.find_hwp_window() == 1

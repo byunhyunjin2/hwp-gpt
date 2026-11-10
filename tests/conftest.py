@@ -53,6 +53,43 @@ class FakeBridge:
         self.rows = getattr(self, "rows", []) + [(action, find, until, to_end)]
         return None if find in self.text else "표 칸 안의 글을 찾지 못함"
 
+    # 서식·표·넣기: 호출만 기록 (한글 동작은 test_hwp_bridge_live)
+    undo_spec = None
+    table_width_before = 40000
+
+    def shapes_of(self, find, nths, char_keys, para_keys):
+        return [[k, {key: 0 for key in char_keys}, {key: 0 for key in para_keys}] for k in (nths or [0])]
+
+    def _log(self, *a):
+        self.calls = getattr(self, "calls", []) + [a]
+
+    def format_text(self, find, nths, char, para):
+        self._log("format", find, nths, char, para)
+        return self.text.count(find) if nths is None else len(nths)
+
+    def read_table(self, anchor, nth=0):
+        return {"cells": [["A1", "이름"], ["B1", "연락처"], ["A2", "홍길동"], ["B2", "010-0000-0000"]]}
+
+    def cell_text(self, anchor, nth, addr):
+        return dict(self.read_table(anchor)["cells"]).get(addr)
+
+    def table_op(self, op, nth=0):
+        self._log("table", op, nth)
+        return None
+
+    def paragraph_of(self, find, nth=0):
+        return next((ln for ln in self.text.splitlines() if find in ln), None)
+
+    def insert(self, item, nth=0, picture=""):
+        self._log("insert", item, nth, picture)
+        return None
+
+    def fields(self):
+        return getattr(self, "field_values", {})
+
+    def put_field(self, name, text):
+        self.field_values[name] = text
+
     def unmark(self, texts):
         self.unmarked = list(texts)
 

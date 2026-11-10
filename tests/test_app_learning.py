@@ -196,3 +196,41 @@ def test_send_asks_before_personal_edit_and_allows_once(tmp_path, monkeypatch, f
     assert r["askPersonal"] and r["reply"] == ""
     r = a.send("홍길동을 이영희로 바꿔줘", [], True)
     assert not r["askPersonal"] and seen == [False, True]
+
+
+def test_login_gives_up_and_frees_port_when_browser_login_never_finishes(monkeypatch, tmp_path):
+    """브라우저를 닫고 로그인하지 않으면 codex login이 끝나지 않음 → 제한 시간 뒤 끝내고 결과를 돌려줌 (2026-11-11)."""
+    import subprocess
+    import sys
+
+    from hwpgpt import app as app_mod
+
+    started = []
+
+    def fake_login():
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        started.append(p)
+        return p
+
+    monkeypatch.setattr(app_mod.cr, "start_login", fake_login)
+    monkeypatch.setattr(app_mod.cr, "login_status", lambda: "logged_out")
+    monkeypatch.setattr(app_mod, "LOGIN_TIMEOUT", 1)
+    api = app_mod.Api.__new__(app_mod.Api)  # 한글·Codex 없이 로그인 부분만
+    assert api.login_start() == "logged_out"
+    assert started[0].poll() is not None  # 남은 codex login 프로세스가 없음
+
+
+def test_panel_undo_redo_runs_recorded_ops_only_from_allowlist(fake_bridge):
+    """🟦 항목 ↶·↷: 도구 서버가 적은 작업을 패널 브리지로 실행. 정해 둔 메서드가 아니면 실행하지 않음."""
+    from hwpgpt import app as app_mod
+
+    api = app_mod.Api.__new__(app_mod.Api)
+    api._bridge, api._undone, api._busy = fake_bridge, [], __import__("threading").Lock()
+    fake_bridge.text = "제목"
+    api._log = {"d1": {"label": "서식", "undo": [{"op": "format_text", "args": ["제목", [0], {"Bold": 0}, {}]}],
+                       "redo": [{"op": "format_text", "args": ["제목", None, {"Bold": 1}, {}]}]},
+                "d2": {"label": "나쁜 것", "undo": [{"op": "_close_without_saving", "args": []}], "redo": []}}
+    assert api.undo_item("d1") == {"restored": 1, "skipped": 0}
+    assert fake_bridge.calls[-1] == ("format", "제목", [0], {"Bold": 0}, {})
+    assert api.redo_item("d1")["restored"] == 1 and api._undone == []  # 알리기 전에 다시 적용 → 알릴 것 없음
+    assert api.undo_item("d2") == {"restored": 0, "skipped": 1}

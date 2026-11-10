@@ -13,8 +13,47 @@ RED = (255, 120, 120)    # 안 바꿈·확인
 SHAPE = ("AlignType", "LeftMargin", "RightMargin", "Indentation")  # 이웃 문단에 맞출 문단 모양
 
 
+MM = 283.465  # 1mm = HWPUNIT
+ALIGN = {"justify": 0, "left": 1, "right": 2, "center": 3, "distribute": 4}  # HParaShape.AlignType
+PAGE_NUM = {"top_left": 1, "top_center": 2, "top_right": 3, "bottom_left": 4, "bottom_center": 5, "bottom_right": 6}
+MEMO = "%%me"  # 한글 메모 컨트롤 ID (2026-11-11 시험)
+# 새 컨트롤을 지우면 되돌아가는 넣기 → 그 컨트롤 ID (2026-11-11 시험. 각주는 안에 'atno'도 생기고, 같은 문단의 뒤 컨트롤은 자리가 밀림)
+UNDO_BY_CTRL = {"picture": "gso", "memo": "%%me", "footnote": "fn", "header": "head", "footer": "foot", "page_number": "pgnp"}
+
+
 class HwpNotAvailable(Exception):
     """한글이 없거나 연결이 끊김."""
+
+
+def _replace_nths(text: str, find: str, replace: str, nths: set[int]) -> str:
+    """text 속 find의 nths번째(0부터)들만 replace로 — apply 결과가 맞는지 비교할 기준."""
+    parts = text.split(find)
+    return "".join(p + ((replace if k in nths else find) if k < len(parts) - 1 else "") for k, p in enumerate(parts))
+
+
+def bmp_to_png(bmp: bytes) -> bytes:
+    """한글 CreatePageImage가 만드는 24비트 BMP → PNG (표준 라이브러리만). ChatGPT는 BMP를 받지 않는다."""
+    import struct
+    import zlib
+
+    (off,) = struct.unpack_from("<I", bmp, 10)
+    w, hgt = struct.unpack_from("<ii", bmp, 18)
+    (bits,) = struct.unpack_from("<H", bmp, 28)
+    if bits != 24:
+        raise ValueError(f"{bits}비트 BMP는 지원하지 않음")
+    stride = (w * 3 + 3) & ~3
+    raw = bytearray()
+    for r in (range(hgt - 1, -1, -1) if hgt > 0 else range(-hgt)):  # 양수 높이 = 아래 줄부터 저장됨
+        row = bmp[off + r * stride: off + r * stride + w * 3]
+        rgb = bytearray(row)
+        rgb[0::3], rgb[2::3] = row[2::3], row[0::3]  # BGR → RGB
+        raw += b"\0" + rgb
+
+    def chunk(t: bytes, d: bytes) -> bytes:
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, abs(hgt), 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
 def attach_running_hwp():
@@ -38,6 +77,8 @@ class HwpBridge:
         self._h = None
         self._marks: dict[str, tuple] = {}    # 패널이 형광펜 칠한 글자 → 색 (지우기용)
         self._cleared: dict[str, tuple] = {}  # 지운 표시 (다시 보기용)
+        self.undo_spec: list[dict] | None = None  # 마지막 표·넣기 작업을 되돌리는 방법 (도구 서버 → 패널 ↶)
+        self.table_width_before = 0  # 마지막 열 작업 전 표 폭 (열 넣기 되돌릴 때 원래 폭으로)
 
     # --- 내부 ---
     def _call(self, fn):
@@ -85,7 +126,7 @@ class HwpBridge:
         if not h.SetPos(lst, para, 0) or tuple(h.GetPos())[:2] != (lst, para):
             return None
         h.HAction.Run("MoveSelParaEnd")
-        t = h.GetTextFile("UNICODE", "saveblock").rstrip("\r\n")
+        t = (h.GetTextFile("UNICODE", "saveblock") or "").rstrip("\r\n")  # 빈 문단은 선택이 없어 None
         h.HAction.Run("Cancel")
         return t
 
@@ -157,20 +198,29 @@ class HwpBridge:
         def do(h):
             out = []
             for e in edits:
-                limit = h.GetTextFile("UNICODE", "").count(e.find)
+                before = h.GetTextFile("UNICODE", "")
+                limit = before.count(e.find)
                 want = None if e.nths is None else set(e.nths)
                 k, pos = 0, []
                 found = self._find(h, e.find, from_start=True)
                 while found and k < limit:
                     if want is None or k in want:
                         self._insert(h, e.replace)  # 선택 영역을 바꿈
+                        end = h.GetPos()  # 바꾼 글 뒤 — 다음 찾기는 여기부터 (바꾼 글 속의 find를 다시 찾지 않게)
                         for _ in range(len(e.replace)):
                             h.HAction.Run("MoveSelLeft")
                         pos.append(list(h.GetPos()))  # 바꾼 글자의 시작 자리
                         self._markpen(h, YELLOW)
-                    h.HAction.Run("Cancel")
+                        h.HAction.Run("Cancel")
+                        h.SetPos(*end)
+                    else:
+                        h.HAction.Run("Cancel")
                     k += 1
                     found = self._find(h, e.find, from_start=False)
+                if want is not None and pos and h.GetTextFile("UNICODE", "") != _replace_nths(before, e.find, e.replace, want):
+                    # 한글 찾기 순서가 본문 글 순서와 달라(글상자·머리말 등) 다른 자리를 바꿈 → 되돌리고 바꾸지 않음
+                    self._revert(h, [{"find": e.find, "replace": e.replace, "pos": pos}])
+                    pos = []
                 if pos:
                     self._marks[e.replace] = YELLOW
                 out.append((e, len(pos), pos))
@@ -183,28 +233,29 @@ class HwpBridge:
         """apply가 바꾼 자리를 거꾸로(마지막 것부터) 원래 글로 되돌린다. 그사이 사용자가 고친 자리는 건너뛴다.
         applied = [{"find", "replace", "pos": [[list, para, pos], ...]}]. (되돌린 수, 건너뛴 수)"""
 
-        def do(h):
-            ok = skipped = 0
-            for a in reversed(applied):
-                for lst, para, p in reversed(a.get("pos") or []):
-                    h.SetPos(lst, para, p)
-                    for _ in range(len(a["replace"])):
-                        h.HAction.Run("MoveSelRight")
-                    if h.GetTextFile("UNICODE", "saveblock").rstrip("\r\n") != a["replace"]:
-                        h.HAction.Run("Cancel")
-                        skipped += 1
-                        continue
-                    self._insert(h, a["find"])  # 선택 영역을 원래 글로 (MarkPenDelete는 선택을 풀어서 나중에)
-                    for _ in range(len(a["find"])):
-                        h.HAction.Run("MoveSelLeft")
-                    if a["find"]:
-                        h.HAction.Run("MarkPenDelete")  # 노랑을 이어받았으면 지움
-                    h.HAction.Run("Cancel")
-                    ok += 1
-                self._marks.pop(a["replace"], None)
-            return ok, skipped
+        return self._call(lambda h: self._revert(h, applied))
 
-        return self._call(do)
+    def _revert(self, h, applied: list[dict]) -> tuple[int, int]:
+        """undo 본문 — 기록한 자리를 거꾸로 원래 글로 (apply가 잘못 바꾼 것을 되돌릴 때도). (되돌린 수, 건너뛴 수)"""
+        ok = skipped = 0
+        for a in reversed(applied):
+            for lst, para, p in reversed(a.get("pos") or []):
+                h.SetPos(lst, para, p)
+                for _ in range(len(a["replace"])):
+                    h.HAction.Run("MoveSelRight")
+                if h.GetTextFile("UNICODE", "saveblock").rstrip("\r\n") != a["replace"]:
+                    h.HAction.Run("Cancel")
+                    skipped += 1
+                    continue
+                self._insert(h, a["find"])  # 선택 영역을 원래 글로 (MarkPenDelete는 선택을 풀어서 나중에)
+                for _ in range(len(a["find"])):
+                    h.HAction.Run("MoveSelLeft")
+                if a["find"]:
+                    h.HAction.Run("MarkPenDelete")  # 노랑을 이어받았으면 지움
+                h.HAction.Run("Cancel")
+                ok += 1
+            self._marks.pop(a["replace"], None)
+        return ok, skipped
 
     def redo(self, applied: list[dict]) -> tuple[int, int]:
         """undo한 것을 다시 적용(노랑 표시 포함). 자리는 apply 때 순서대로 기록됐으니 앞에서부터.
@@ -301,7 +352,8 @@ class HwpBridge:
 
     def clear_all_marks(self) -> int:
         """문서의 형광펜을 모두 지운다 (패널이 칠한 것 + 남은 것 + 사용자가 칠한 것). 지운 표시 수.
-        본문은 전체 선택, 표는 표마다 모든 칸을 선택해서 지운다 (본문 전체 선택은 표 칸 안까지는 지우지 못함)."""
+        본문은 전체 선택, 표는 표마다 모든 칸을 선택해서 지운다 (본문 전체 선택은 표 칸 안까지는 지우지 못함).
+        메모는 delete_memos로 따로 (app이 함께 부름)."""
 
         def count(h) -> int:
             return h.GetTextFile("HWPML2X", "").count("<MARKPENBEGIN")
@@ -412,6 +464,495 @@ class HwpBridge:
                 self._marks[t] = rgb
         if texts:
             self._cleared = {}  # 새 표시가 생기면 예전 '다시 보기'는 의미 없음
+
+    # --- 서식·표·넣기·검토 (2026-11-11, 한컴 2022 시험으로 확인한 액션만) ---
+    def _seek(self, h, text: str, nth: int = 0) -> bool:
+        """문서 처음부터 text의 nth번째(0부터)를 선택."""
+        found = self._find(h, text, from_start=True)
+        for _ in range(nth):
+            found = found and self._find(h, text, from_start=False)
+        return found
+
+    def _mark_back(self, h, n: int) -> None:
+        """방금 넣은 글 n자를 노랑으로 (커서는 넣은 글 뒤)."""
+        end = h.GetPos()
+        for _ in range(n):
+            h.HAction.Run("MoveSelLeft")
+        self._markpen(h, YELLOW)
+        h.HAction.Run("Cancel")
+        h.SetPos(*end)
+
+    def _type_lines(self, h, text: str, mark: bool = True) -> list[list[int]]:
+        """여러 줄 글: 줄마다 문단을 나눠 넣고 노랑 표시. 줄마다 [list, para] (되돌리기용)."""
+        spots = []
+        for i, line in enumerate(text.splitlines() or [""]):
+            if i:
+                h.HAction.Run("BreakPara")
+            spots.append(list(h.GetPos())[:2])
+            if line:
+                self._insert(h, line)
+                if mark:
+                    self._mark_back(h, len(line))
+                    self._marks[line] = YELLOW
+        return spots
+
+    def shapes_of(self, find: str, nths, char_keys, para_keys) -> list:
+        """format_text 되돌리기용: find의 각 번째 자리의 지금 모양 [[k, 글자 모양, 문단 모양], ...]."""
+
+        def do(h):
+            out, k = [], 0
+            limit = h.GetTextFile("UNICODE", "").count(find)
+            want = None if nths is None else set(nths)
+            found = self._find(h, find, from_start=True)
+            while found and k < limit:
+                if want is None or k in want:
+                    c, p = h.HParameterSet.HCharShape, h.HParameterSet.HParaShape
+                    h.HAction.GetDefault("CharShape", c.HSet)
+                    h.HAction.GetDefault("ParagraphShape", p.HSet)
+                    ch = {key: getattr(c, key) for key in char_keys}
+                    if "TextColor" in ch:  # 한글 색 값은 0x00BBGGRR → format_text가 받는 (r, g, b)
+                        v = ch["TextColor"]
+                        ch["TextColor"] = [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF]
+                    out.append([k, ch, {key: getattr(p, key) for key in para_keys}])
+                h.HAction.Run("Cancel")
+                k += 1
+                found = self._find(h, find, from_start=False)
+            return out
+
+        return self._call(do)
+
+    def format_text(self, find: str, nths, char: dict, para: dict) -> int:
+        """find(nths번째들, None이면 전부)에 글자 모양(char)·그 문단에 문단 모양(para)을 입힌다. 바꾼 수."""
+
+        def do(h):
+            limit = h.GetTextFile("UNICODE", "").count(find)
+            want = None if nths is None else set(nths)
+            k = n = 0
+            found = self._find(h, find, from_start=True)
+            while found and k < limit:
+                if want is None or k in want:
+                    if char:
+                        c = h.HParameterSet.HCharShape
+                        h.HAction.GetDefault("CharShape", c.HSet)
+                        for key, v in char.items():
+                            setattr(c, key, h.RGBColor(*v) if key == "TextColor" else v)
+                        h.HAction.Execute("CharShape", c.HSet)
+                    if para:
+                        p = h.HParameterSet.HParaShape
+                        h.HAction.GetDefault("ParagraphShape", p.HSet)
+                        for key, v in para.items():
+                            setattr(p, key, v)
+                        h.HAction.Execute("ParagraphShape", p.HSet)
+                    n += 1
+                h.HAction.Run("Cancel")
+                k += 1
+                found = self._find(h, find, from_start=False)
+            return n
+
+        return self._call(do)
+
+    @staticmethod
+    def _cell_addr(h) -> str:
+        """커서가 있는 표 칸 주소 (예: B3)."""
+        import re
+
+        m = re.search(r"\(([A-Z]+\d+)\)", str(h.KeyIndicator()[-1]))
+        return m.group(1) if m else ""
+
+    @staticmethod
+    def _cell_text(h) -> str:
+        h.HAction.Run("MoveListBegin")
+        h.HAction.Run("Select")
+        h.HAction.Run("MoveListEnd")
+        t = h.GetTextFile("UNICODE", "saveblock") or ""
+        h.HAction.Run("Cancel")
+        return t.rstrip("\r\n")
+
+    def _walk_cells(self, h, anchor: str, nth: int, visit) -> str | None:
+        """anchor(nth번째)가 든 표의 칸을 A1부터 차례로 visit(주소) — visit가 True면 거기서 멈춤. 안 되면 이유."""
+        if self._goto_cell(h, anchor, nth) is None:
+            return "표 칸 안의 글을 찾지 못함"
+        h.HAction.Run("TableColBegin")
+        h.HAction.Run("TableColPageUp")
+        seen = set()
+        for _ in range(3000):
+            addr = self._cell_addr(h)
+            if addr in seen or visit(addr):
+                return None
+            seen.add(addr)
+            if not h.HAction.Run("TableRightCell"):
+                return None
+        return None
+
+    def read_table(self, anchor: str, nth: int = 0) -> dict:
+        """anchor가 든 표 전체: {"cells": [[주소, 글], ...]} 또는 {"error"}."""
+
+        def do(h):
+            cells = []
+            why = self._walk_cells(h, anchor, nth, lambda a: cells.append([a, self._cell_text(h)]))
+            return {"error": why} if why else {"cells": cells}
+
+        return self._call(do)
+
+    def _goto_addr(self, h, anchor: str, nth: int, addr: str) -> str | None:
+        """anchor가 든 표의 addr 칸으로. 안 되면 이유."""
+        why = self._walk_cells(h, anchor, nth, lambda a: a == addr.upper())
+        if why:
+            return why
+        return None if self._cell_addr(h) == addr.upper() else f"{addr} 칸이 없음"
+
+    def cell_text(self, anchor: str, nth: int, addr: str) -> str | None:
+        def do(h):
+            return None if self._goto_addr(h, anchor, nth, addr) else self._cell_text(h)
+
+        return self._call(do)
+
+    def table_op(self, op: dict, nth: int = 0) -> str | None:
+        """표 작업 하나. op = {"action", "find"(표 칸 글), "cell", "text", "to", "rows"}. 안 되면 이유.
+        set_cell · insert_col_left · insert_col_right · delete_col · merge(cell~to) · create(find 문단 아래에 rows 표)."""
+        a, find = op.get("action"), op.get("find", "")
+        self.undo_spec = None  # 되돌릴 수 있는 작업이면 do 안에서 채움 (도구 서버가 읽어 패널 ↶에 씀)
+
+        def do(h):
+            if a == "create":
+                rows = op.get("rows") or []
+                cols = max((len(r) for r in rows), default=0)
+                if not rows or not cols or not self._seek(h, find, nth):
+                    return "rows가 비었거나 find 문단을 찾지 못함"
+                h.HAction.Run("Cancel")
+                h.HAction.Run("MoveParaEnd")
+                h.HAction.Run("BreakPara")
+                t = h.HParameterSet.HTableCreation
+                h.HAction.GetDefault("TableCreate", t.HSet)
+                t.Rows, t.Cols = len(rows), cols
+                t.WidthType = 0  # 0 = 본문(단) 폭에 맞춤. 기본값이면 열마다 21.6mm로 좁게 만들어짐 (2026-11-11 시험)
+                lst, para, _ = h.GetPos()
+                at_end = self._para_text(h, lst, para + 1) is None  # 문서 끝에 표를 넣으면 한글이 뒤에 빈 문단을 더 만듦
+                h.SetPos(lst, para, 0)
+                if not h.HAction.Execute("TableCreate", t.HSet):
+                    return "한글이 표 만들기를 거부함"
+                self.undo_spec = [{"op": "delete_ctrl_at", "args": ["tbl", *self._anchor(h.ParentCtrl), 2 if at_end else 1]}]
+                cells = [str(v) for r in rows for v in list(r) + [""] * (cols - len(r))]
+                for i, v in enumerate(cells):
+                    self._type_lines(h, v)
+                    if i < len(cells) - 1:
+                        h.HAction.Run("TableRightCell")
+                return None
+            why = self._goto_addr(h, find, nth, op.get("cell", "A1"))
+            if why:
+                return why
+            if a == "set_cell":
+                h.HAction.Run("MoveListBegin")
+                h.HAction.Run("Select")
+                h.HAction.Run("MoveListEnd")
+                if (h.GetTextFile("UNICODE", "saveblock") or "").strip("\r\n"):
+                    h.HAction.Run("Delete")
+                else:
+                    h.HAction.Run("Cancel")
+                self._type_lines(h, str(op.get("text", "")), mark=op.get("mark", True))
+                return None
+            if a == "merge":
+                import re
+
+                (c1, r1), (c2, r2) = [re.fullmatch(r"([A-Z]+)(\d+)", x.upper()).groups()
+                                      for x in (op.get("cell", ""), op.get("to", ""))]
+                col = lambda s: sum((ord(ch) - 64) * 26 ** i for i, ch in enumerate(reversed(s)))  # noqa: E731
+                if col(c2) < col(c1) or int(r2) < int(r1):
+                    return "to는 cell보다 오른쪽·아래여야 함"
+                h.HAction.Run("TableCellBlock")
+                h.HAction.Run("TableCellBlockExtend")
+                for _ in range(col(c2) - col(c1)):
+                    h.HAction.Run("TableRightCell")
+                for _ in range(int(r2) - int(r1)):
+                    h.HAction.Run("TableLowerCell")
+                ok = h.HAction.Run("TableMergeCell")
+                h.HAction.Run("Cancel")
+                return None if ok else "한글이 칸 합치기를 거부함"
+            run = {"insert_col_left": "TableInsertLeftColumn", "insert_col_right": "TableInsertRightColumn",
+                   "delete_col": "TableDeleteColumn"}.get(a)
+            if not run:
+                return f"모르는 작업: {a}"
+            self.table_width_before = h.CellShape.Item("Width")  # 커서가 칸에 있으면 표 전체 폭 (2026-11-11 시험)
+            if not h.HAction.Run(run):
+                return "한글이 열 작업을 거부함"
+            if a.startswith("insert_col"):  # 한글은 열을 넣으면 표가 넓어져 본문 밖으로 나감 → 본문 폭 안으로
+                self._resize_table(h, "TableResizeLeft", lambda w: w > self._text_width(h))
+            elif op.get("width"):  # 열 넣기를 되돌릴 때: 줄였던 표를 원래 폭으로
+                self._resize_table(h, "TableResizeRight", lambda w: w < op["width"])
+            return None
+
+        return self._call(do)
+
+    def paragraph_of(self, find: str, nth: int = 0) -> str | None:
+        """find가 든 문단의 글 (지우기 전 보호 검사용). 표 칸 안이면 None."""
+
+        def do(h):
+            if not self._seek(h, find, nth):
+                return None
+            h.HAction.Run("Cancel")
+            if h.ParentCtrl and h.ParentCtrl.CtrlID == "tbl":
+                return None
+            lst, para, _ = h.GetPos()
+            return self._para_text(h, lst, para)
+
+        return self._call(do)
+
+    def insert(self, item: dict, nth: int = 0, picture: str = "") -> str | None:
+        """넣기·지우기 하나. item = {"kind", "find", "text", "position", "width_mm"}. 안 되면 이유.
+        paragraph(find 문단 아래 새 문단) · delete_paragraph · page_break(find 문단 뒤) · picture(find 문단 아래)
+        · footnote(find 글 뒤) · memo(find 문단에 메모) · header · footer · page_number(position)
+        · picture(in_cell: 기준 글이 든 표 칸 안에, cell: find가 든 표의 그 주소 칸 안에) · replace_picture(picture_no번째 그림을 같은 폭으로 바꿈)."""
+        kind, find, text = item.get("kind"), item.get("find", ""), str(item.get("text", ""))
+        self.undo_spec = None
+
+        def do(h):
+            before = self._ctrls(h)
+            why = body(h)
+            if why is None and kind in UNDO_BY_CTRL:  # 그 종류의 새 컨트롤이 딱 하나면 그것을 지우는 게 되돌리기
+                new = [c for c in self._ctrls(h) - before if c[0] == UNDO_BY_CTRL[kind]]
+                if len(new) == 1:
+                    # 그림은 새 문단을 만들어 넣으므로 그 빈 문단까지 지워야 원래대로 (안 지우면 아래 표 자리가 밀림)
+                    self.undo_spec = [{"op": "delete_ctrl_at", "args": [*new[0], kind == "picture"]}]
+            return why
+
+        def body(h):
+            A = h.HAction
+            if kind in ("header", "footer"):
+                s = h.HParameterSet.HHeaderFooter
+                A.GetDefault("HeaderFooter", s.HSet)
+                # 머리말/꼬리말은 HeaderFooterCtrlType(0/1). Type은 양쪽·홀수·짝수 쪽이라 Type=1로는 꼬리말이 안 생기고
+                # 머리말에 들어갔음 (2026-11-11 시험으로 발견)
+                s.HSet.SetItem("HeaderFooterCtrlType", 0 if kind == "header" else 1)
+                if not A.Execute("HeaderFooter", s.HSet):
+                    return "한글이 머리말·꼬리말을 거부함"
+                self._insert(h, text)
+                A.Run("CloseEx")
+                return None
+            if kind == "page_number":
+                s = h.HParameterSet.HPageNumPos
+                A.GetDefault("PageNumPos", s.HSet)
+                s.DrawPos = PAGE_NUM.get(item.get("position", "bottom_center"), 5)
+                return None if A.Execute("PageNumPos", s.HSet) else "한글이 쪽 번호를 거부함"
+            if kind == "picture" and item.get("cell"):  # 빈 칸은 가리킬 글이 없으니 표의 아무 칸 글 + 칸 주소로
+                if not picture:
+                    return "첨부한 그림 파일만 넣을 수 있음"
+                why = self._goto_addr(h, find, nth, str(item["cell"]))
+                if why:
+                    return why
+                has_text = bool(self._cell_text(h))
+                A.Run("MoveListEnd")
+                if has_text:
+                    A.Run("BreakPara")
+                return self._put_picture(h, picture, item.get("width_mm"), in_cell=True)
+            if kind == "replace_picture":
+                if not picture:
+                    return "첨부한 그림 파일만 넣을 수 있음"
+                pics = self._pictures(h)
+                no = int(item.get("picture_no") or 0)
+                if not 1 <= no <= len(pics):
+                    return f"picture_no는 1~{len(pics)} (문서의 그림 {len(pics)}개, 문서 순서)"
+                old = pics[no - 1]
+                width = old.Properties.Item("Width")  # 원래 그림 폭 그대로, 높이는 새 그림 비율로
+                h.SetPosBySet(old.GetAnchorPos(0))
+                h.DeleteCtrl(old)
+                return self._put_picture(h, picture, width / MM)
+            if not find or not self._seek(h, find, nth):
+                return "find 글을 찾지 못함"
+            A.Run("Cancel")  # 커서는 찾은 글 뒤
+            if kind == "memo":
+                # 메모는 선택한 글을 필드로 감싸고, 메모 경계를 걸치는 글은 한글 찾기로 못 찾는다 (2026-11-11 시험).
+                # 문단 전체에 달면 경계가 문단 처음·끝이라 문단 안의 어떤 글도 계속 찾을 수 있다
+                A.Run("MoveParaBegin")
+                A.Run("MoveSelParaEnd")
+                A.Run("InsertFieldMemo")
+                self._insert(h, text)
+                A.Run("CloseEx")
+                return None
+            if kind == "footnote":
+                A.Run("InsertFootnote")
+                self._insert(h, text)
+                A.Run("CloseEx")
+                return None
+            if kind == "delete_paragraph":
+                if h.ParentCtrl and h.ParentCtrl.CtrlID == "tbl":
+                    return "표 칸 안의 문단은 지우지 않음 (표 작업으로)"
+                A.Run("MoveParaBegin")
+                A.Run("MoveSelParaEnd")
+                A.Run("MoveSelRight")  # 문단 끝 줄바꿈까지
+                A.Run("Delete")
+                return None
+            in_cell = kind == "picture" and item.get("in_cell") and h.ParentCtrl and h.ParentCtrl.CtrlID == "tbl"
+            while not in_cell and h.ParentCtrl and h.ParentCtrl.CtrlID == "tbl":  # 표 칸 글이 기준이면 표 바로 뒤에
+                h.SetPosBySet(h.ParentCtrl.GetAnchorPos(0))
+            A.Run("MoveParaEnd")
+            if kind == "page_break":
+                A.Run("BreakPage")
+                return None
+            A.Run("BreakPara")
+            if kind == "paragraph":
+                spots = self._type_lines(h, text)
+                self.undo_spec = [{"op": "delete_para_at", "args": [*spot, line]}
+                                  for spot, line in reversed(list(zip(spots, text.splitlines() or [""])))]
+                return None
+            if kind == "picture":
+                if not picture:
+                    return "첨부한 그림 파일만 넣을 수 있음"
+                return self._put_picture(h, picture, item.get("width_mm"), in_cell=bool(in_cell))
+            return f"모르는 종류: {kind}"
+
+        return self._call(do)
+
+    @staticmethod
+    def _text_width(h) -> int:
+        """본문 폭 (HWPUNIT)."""
+        sd = h.HParameterSet.HSecDef
+        h.HAction.GetDefault("PageSetup", sd.HSet)
+        pd = sd.PageDef
+        return pd.PaperWidth - pd.LeftMargin - pd.RightMargin
+
+    @staticmethod
+    def _resize_table(h, action: str, more) -> None:
+        """커서가 든 표의 모든 칸을 골라 action(칸마다 약 1mm씩 줄이기·늘리기)을 more(표 폭)가 참인 동안 되풀이.
+        ponytail: 1mm씩 — 표 폭을 한 번에 정하는 COM 방법을 못 찾음 (TablePropertyDialog Width는 무시됨, 2026-11-11)."""
+        h.HAction.Run("TableCellBlock")
+        h.HAction.Run("TableCellBlockExtend")
+        h.HAction.Run("TableCellBlockExtend")
+        for _ in range(400):
+            if not more(h.CellShape.Item("Width")) or not h.HAction.Run(action):
+                break
+        h.HAction.Run("Cancel")
+
+    @staticmethod
+    def _pictures(h) -> list:
+        """문서의 그림 컨트롤 (표 안 포함, 문서 순서). 글상자·도형은 뺀다."""
+        out, c = [], h.HeadCtrl
+        while c:
+            if c.CtrlID == "gso" and c.UserDesc == "그림":
+                out.append(c)
+            c = c.Next
+        return out
+
+    def _put_picture(self, h, path: str, width_mm=None, in_cell: bool = False) -> str | None:
+        """커서 자리에 그림(문서에 포함). 폭은 width_mm·본문 폭(칸 안이면 칸 폭)을 넘지 않게, 높이는 원래 비율."""
+        pic = h.InsertPicture(path, True, 0, False, False, 0, 0, 0)  # 원래 크기 — 원래 비율을 알려고
+        if pic is None:
+            return "한글이 그림 넣기를 거부함"
+        w, hgt = pic.Properties.Item("Width"), pic.Properties.Item("Height")
+        if in_cell:  # '칸 크기에 맞춤'(2)으로 칸 폭을 알아낸 뒤 높이만 원래 비율로 (그대로 두면 칸 높이로 납작해짐)
+            pos = pic.GetAnchorPos(0)
+            h.DeleteCtrl(pic)
+            h.SetPosBySet(pos)
+            pic = h.InsertPicture(path, True, 2, False, False, 0, 0, 0)
+            limit = pic.Properties.Item("Width")
+        else:
+            limit = self._text_width(h)
+        want = min(int(float(width_mm or 1e9) * MM), limit)
+        if in_cell or w > want:
+            ps = pic.Properties
+            ps.SetItem("Width", want)
+            ps.SetItem("Height", int(hgt * want / w))
+            pic.Properties = ps
+        return None
+
+    @staticmethod
+    def _anchor(c) -> list[int]:
+        s = c.GetAnchorPos(0)
+        return [s.Item("List"), s.Item("Para"), s.Item("Pos")]
+
+    def _ctrls(self, h) -> set[tuple]:
+        """문서의 컨트롤 (ID, list, para, pos) — 넣기 전후를 비교해 새 컨트롤을 찾는다."""
+        out, c = set(), h.HeadCtrl
+        while c:
+            out.add((c.CtrlID, *self._anchor(c)))
+            c = c.Next
+        return out
+
+    def delete_ctrl_at(self, ctrl_id: str, lst: int, para: int, pos: int, drop_empty_para: int = 0) -> bool:
+        """그 자리의 컨트롤(표·그림·메모·각주·머리말·쪽 번호)을 지운다. 자리가 바뀌었으면 False.
+        drop_empty_para: 1 = 지운 뒤 그 문단이 비면 앞 문단과 합침 (표·그림을 넣으며 만든 빈 문단),
+        2 = 그 뒤 문서 끝의 빈 문단도 (문서 끝에 표를 넣으면 한글이 하나 더 만듦)."""
+
+        def do(h):
+            same, c = [], h.HeadCtrl
+            while c:
+                if c.CtrlID == ctrl_id and self._anchor(c)[:2] == [lst, para]:
+                    same.append(c)
+                c = c.Next
+            # 같은 문단에 나중에 넣은 것 때문에 자리(pos)가 밀렸을 수 있음 → 정확히 맞는 것, 없으면 그 문단에 하나뿐인 것
+            hit = [c for c in same if self._anchor(c)[2] == pos] or (same if len(same) == 1 else [])
+            for c in hit[:1]:
+                h.DeleteCtrl(c)
+                if drop_empty_para and para > 0 and self._para_text(h, lst, para) == "":
+                    if (drop_empty_para == 2 and self._para_text(h, lst, para + 1) == ""
+                            and self._para_text(h, lst, para + 2) is None):
+                        h.SetPos(lst, para + 1, 0)
+                        h.HAction.Run("DeleteBack")
+                    h.SetPos(lst, para, 0)
+                    h.HAction.Run("DeleteBack")
+                return True
+            return False
+
+        return self._call(do)
+
+    def delete_para_at(self, lst: int, para: int, text: str) -> bool:
+        """새로 넣은 문단을 지운다 (앞 문단 끝의 나눔부터 이 문단 끝까지). 글이 바뀌었으면 False."""
+
+        def do(h):
+            if para < 1 or self._para_text(h, lst, para) != text:
+                return False
+            h.SetPos(lst, para - 1, 0)
+            h.HAction.Run("MoveParaEnd")  # 앞 문단 끝 (표 같은 컨트롤이 있어도)
+            h.HAction.Run("MoveSelRight")
+            h.HAction.Run("MoveSelParaEnd")
+            h.HAction.Run("Delete")
+            return True
+
+        return self._call(do)
+
+    def fields(self) -> dict[str, str]:
+        """누름틀 이름 → 지금 글."""
+
+        def do(h):
+            names = [n for n in str(h.GetFieldList(0, 0) or "").split("\x02") if n]
+            return {n: h.GetFieldText(n) for n in dict.fromkeys(names)}
+
+        return self._call(do)
+
+    def put_field(self, name: str, text: str) -> None:
+        self._call(lambda h: h.PutFieldText(name, text))
+
+    def page_png(self, page: int, folder) -> bytes:
+        """page쪽(1부터)을 그림으로 → PNG 바이트. BMP는 folder에 잠깐 만들고 지운다."""
+        from pathlib import Path
+
+        bmp = Path(folder).resolve() / f"page{page}.bmp"  # 상대 경로면 한글이 대화상자를 띄우고 멈춤 (2026-11-11)
+
+        def do(h):
+            if not 1 <= page <= h.PageCount:
+                raise ValueError(f"쪽 번호는 1~{h.PageCount}")
+            h.HAction.Run("Cancel")
+            h.SetPos(0, 0, 0)  # 커서가 표 칸·머리말 안이면 그 칸만 그려짐 (2026-11-11 시험: 68×14 그림)
+            h.CreatePageImage(str(bmp), page - 1, 80, 24, "bmp")
+            return bmp.read_bytes()
+
+        try:
+            return bmp_to_png(self._call(do))
+        finally:
+            bmp.unlink(missing_ok=True)
+
+    def delete_memos(self) -> int:
+        """문서의 한글 메모를 모두 지운다. 지운 수."""
+
+        def do(h):
+            n, c = 0, h.HeadCtrl
+            while c:
+                nxt = c.Next
+                if c.CtrlID == MEMO and h.DeleteCtrl(c):
+                    n += 1
+                c = nxt
+            return n
+
+        return self._call(do)
 
     # --- 테스트 전용 ---
     def _type_at_start(self, text: str) -> None:

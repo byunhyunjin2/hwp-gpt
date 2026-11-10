@@ -16,6 +16,8 @@ from .memory import MemoryStore
 from .rules import AMOUNT_NOTES, PROTECTED_NOTE, amount_checks, changed_years, leftover_years, resolve_text, touches_amount
 
 TITLE = "HWP_GPT"
+LOGIN_TIMEOUT = 300  # 초 — 브라우저 로그인을 기다리는 시간
+UNDO_OPS = {"format_text", "table_op", "insert", "put_field", "delete_ctrl_at", "delete_para_at"}  # ↶·↷에 쓰는 HwpBridge 메서드
 UI = Path(__file__).resolve().parent / "ui" / "index.html"
 ICON = Path(__file__).resolve().parent / "assets" / "hwpgpt.ico"  # 창 제목줄 (개발판도 병아리)
 
@@ -170,10 +172,24 @@ class Api:
         }
 
     def login_start(self) -> str:
-        p = cr.start_login()
-        p.wait()
+        """[ChatGPT로 로그인]. 브라우저를 닫고 로그인하지 않으면 `codex login`이 끝나지 않아 버튼이 멈추고
+        로그인 포트(1455)를 계속 잡아 다음 시도도 실패하므로 LOGIN_TIMEOUT 뒤 끝낸다 (2026-11-11 점검)."""
+        import subprocess
+
+        self._stop_login()
+        p = self._login_proc = cr.start_login()
+        try:
+            p.wait(timeout=LOGIN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            self._stop_login()
         self._login = cr.login_status()
         return self._login
+
+    def _stop_login(self) -> None:
+        p, self._login_proc = getattr(self, "_login_proc", None), None
+        if p and p.poll() is None:
+            p.kill()
+            p.wait(5)
 
     # --- 대화 ---
     def _on_progress(self, pct: int, step: str) -> None:
@@ -256,14 +272,15 @@ class Api:
             self._doc_type = r.doc_type or self._doc_type
             self._last_usage = r.usage
             self._limits = cr.read_rate_limits(r.thread_id) or self._limits
-            self._bridge.remember_marks([a["replace"] for a in r.applied if a.get("count")])
+            self._bridge.remember_marks([a["replace"] for a in r.applied if a.get("count")]
+                                        + [m for d in r.done for m in d.get("marks", [])])
             self._bridge.remember_marks([c["text"] for c in r.checks], RED)
-            for a in r.applied:  # 항목마다 [↶] 되돌리기용 번호
-                if a.get("count"):
+            for a in r.applied + [d for d in r.done if d.get("undo")]:  # 항목마다 [↶] 되돌리기용 번호
+                if a.get("count") or a.get("undo"):
                     a["id"] = uuid.uuid4().hex[:8]
                     self._log[a["id"]] = a
             ask = not personal and (cr.asks_permission(r.reply) or any(c.get("note", "").startswith(PROTECTED_NOTE) for c in r.checks))
-            return {"reply": cr.strip_permission(r.reply), "changes": r.applied, "checks": r.checks,
+            return {"reply": cr.strip_permission(r.reply), "changes": r.applied, "checks": r.checks, "done": r.done,
                     "askPersonal": ask,
                     "docType": self._doc_type, "error": r.error, "usage": r.usage,
                     "candidates": self._pop_candidates(), "attachNotes": notes}
@@ -292,7 +309,10 @@ class Api:
         if not self._busy.acquire(blocking=False):
             return {"error": "요청 처리가 끝난 뒤 눌러 주세요"}
         try:
-            done, skipped = (self._bridge.undo if undo else self._bridge.redo)([rec])
+            if "undo" in rec:  # 서식·표·넣기: 도구 서버가 적어 둔 되돌리기·다시 하기 작업
+                done, skipped = self._run_ops(rec, undo)
+            else:
+                done, skipped = (self._bridge.undo if undo else self._bridge.redo)([rec])
             self._snapshot = self._bridge.read_text()  # 패널에서 한 것을 '사용자가 직접 고친 것'으로 배우지 않게
         except HwpNotAvailable:
             return {"error": "한글 문서를 열어 주세요"}
@@ -300,14 +320,33 @@ class Api:
             self._busy.release()
         if done:
             rec["undone"] = undo
-            note = f"{rec['find']} → {rec['replace']} 되돌림(원래 글로 돌아감)"
+            note = (f"{rec['label']} 되돌림" if "label" in rec
+                    else f"{rec['find']} → {rec['replace']} 되돌림(원래 글로 돌아감)")
             if undo:
                 self._undone.append(note)
             elif note in self._undone:  # AI에게 알리기 전에 다시 적용했으면 알릴 것 없음
                 self._undone.remove(note)
             else:
-                self._undone.append(f"{rec['find']} → {rec['replace']} 다시 적용")
+                self._undone.append(f"{rec['label']} 다시 적용" if "label" in rec
+                                    else f"{rec['find']} → {rec['replace']} 다시 적용")
         return {"restored": done, "skipped": skipped}
+
+    def _run_ops(self, rec: dict, undo: bool) -> tuple[int, int]:
+        """↶·↷: 기록된 작업을 이 패널의 HwpBridge로 실행. (된 수, 안 된 수) — 그사이 문서가 바뀌어 자리가 없으면 안 됨."""
+        ok = bad = 0
+        for o in rec["undo" if undo else "redo"]:
+            if o.get("op") not in UNDO_OPS:  # 도구 서버가 적은 것 중 정해 둔 작업만
+                bad += 1
+                continue
+            self._bridge.undo_spec = None
+            r = getattr(self._bridge, o["op"])(*o["args"])
+            if isinstance(r, str) or r is False or r == 0:
+                bad += 1
+            else:
+                ok += 1
+        if not undo and ok and self._bridge.undo_spec:  # 다시 넣었으면 자리가 새로 생김 → 다음 ↶는 새 자리로
+            rec["undo"] = self._bridge.undo_spec
+        return ok, bad
 
     def new_conversation(self) -> None:
         self._thread_id = None
@@ -345,7 +384,7 @@ class Api:
         if not self._busy.acquire(blocking=False):
             return {"error": "요청 처리가 끝난 뒤 눌러 주세요"}
         try:
-            return {"cleared": self._bridge.clear_all_marks()}
+            return {"cleared": self._bridge.clear_all_marks(), "memos": self._bridge.delete_memos()}
         except HwpNotAvailable:
             return {"error": "한글 문서를 열어 주세요"}
         finally:
@@ -457,6 +496,7 @@ def main() -> None:
     webview.start(gui="edgechromium", icon=str(ICON))
     stop.set()
     t.join(3)  # 패널을 닫으면 한글 창 크기 원래대로
+    api._stop_login()  # 로그인 중에 닫으면 남은 codex login이 포트를 잡지 않게
     api._worker.stop()
 
 

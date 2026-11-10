@@ -17,7 +17,10 @@ DATE_RE = re.compile(
 PHONE_RE = re.compile(r"\b0\d{1,2}-\d{3,4}-\d{4}\b")
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 RRN_RE = re.compile(r"\b\d{6}-[1-4]\d{6}\b")
-PERSONAL_KEYWORDS = ("담당자", "성명", "연락처", "전화", "휴대전화", "이메일", "주소")
+_KEY = r"(?:담당자|성명|연락처|휴대\s*전화|전화(?:\s*번호)?|이메일(?:\s*주소)?|주소)"
+# 낱말이 '이름표'로 쓰인 때만 (2026-11-11 점검: '주소지 이전 안내'·'전화위복'까지 막았음)
+# — 'OO:' 꼴이거나, 줄 맨 앞(글머리 뒤)에 낱말 그대로(뒤에 한글이 붙지 않음)
+PERSONAL_LABEL_RE = re.compile(rf"{_KEY}\s*[:：]|^\s*(?:[-•·○●◦▪■□◆◇▶※*]\s*)?{_KEY}(?![가-힣])", re.M)
 AMOUNT_RE = re.compile(r"\d{1,3}(?:,\d{3})+")
 ID_RE = re.compile(r"\d{7,}")
 
@@ -86,7 +89,7 @@ def _weekday_problems(text: str) -> list[str]:
 def _is_personal(context: str) -> bool:
     return bool(
         PHONE_RE.search(context) or EMAIL_RE.search(context) or RRN_RE.search(context)
-        or any(k in context for k in PERSONAL_KEYWORDS)
+        or PERSONAL_LABEL_RE.search(context)
     )
 
 

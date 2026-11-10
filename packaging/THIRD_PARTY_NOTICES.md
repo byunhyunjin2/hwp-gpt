@@ -4,7 +4,7 @@ HWP_GPT 설치본에는 아래 구성요소가 포함되어 있습니다. 각 �
 
 | 구성요소 | 용도 | 라이선스 | 출처 |
 |---|---|---|---|
-| OpenAI Codex CLI `rust-v0.163.0` (`codex/` 폴더) | ChatGPT 로그인·대화 실행 | Apache License 2.0 | https://github.com/openai/codex |
+| OpenAI Codex CLI `rust-v0.167.0` (`codex/` 폴더) | ChatGPT 로그인·대화 실행 | Apache License 2.0 | https://github.com/openai/codex |
 | Python 3.14 런타임 | 실행 환경 | PSF License | https://www.python.org |
 | pywebview 6.2.1 | 패널 화면(WebView2) | BSD 3-Clause | https://github.com/r0x0r/pywebview |
 | pythonnet 3.2.1 | pywebview의 .NET 연결 | MIT | https://github.com/pythonnet/pythonnet |

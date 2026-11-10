@@ -8,13 +8,65 @@ import os
 import re
 from pathlib import Path
 
+import difflib
+import tempfile
+
 from . import session
-from .hwp_bridge import HwpNotAvailable
-from .rules import (DATE_RE, Edit, amount_checks, changed_years, leftover_years, resolve_text, strip_unit,
-                    PROTECTED_NOTE, touches_amount, validate_edits)
+from .hwp_bridge import ALIGN, MM, HwpNotAvailable
+from .rules import (DATE_RE, Edit, amount_checks, changed_years, is_protected, is_vague, leftover_years, resolve_text,
+                    strip_unit, PROTECTED_NOTE, touches_amount, validate_edits)
 
 NO_HWP = "한글 문서를 열어 주세요"
 MAX_LINES = 80
+PERMIT_NOTE = f"{PROTECTED_NOTE}: 사용자 허락이 필요함"
+TABLE_KO = {"set_cell": "칸 채우기", "insert_col_left": "왼쪽에 열 넣기", "insert_col_right": "오른쪽에 열 넣기",
+            "delete_col": "열 지우기", "merge": "칸 합치기", "create": "새 표"}
+INSERT_KO = {"paragraph": "새 문단", "delete_paragraph": "문단 지우기", "page_break": "쪽 나누기", "picture": "그림 넣기",
+             "footnote": "각주", "memo": "메모", "header": "머리말", "footer": "꼬리말", "page_number": "쪽 번호",
+             "replace_picture": "그림 바꾸기"}
+NO_FIND = ("header", "footer", "page_number", "replace_picture")  # 기준 글 없이 하는 넣기
+
+
+def shapes(item: dict) -> tuple[dict, dict]:
+    """format_text 항목 → (한글 글자 모양, 문단 모양) 값. 잘못된 값이면 ValueError."""
+    char, para = {}, {}
+    for k, key in (("bold", "Bold"), ("italic", "Italic")):
+        if k in item:
+            char[key] = int(bool(item[k]))
+    if "underline" in item:
+        char["UnderlineType"] = 1 if item["underline"] else 0  # 1 = 글자 아래
+    if "strike" in item:
+        char["StrikeOutType"] = 1 if item["strike"] else 0
+    if c := item.get("color"):
+        m = re.fullmatch(r"#?([0-9a-fA-F]{6})", str(c))
+        if not m:
+            raise ValueError(f"색은 #RRGGBB: {c}")
+        char["TextColor"] = tuple(int(m[1][i:i + 2], 16) for i in (0, 2, 4))
+    if s := item.get("size"):
+        if not 1 <= float(s) <= 200:
+            raise ValueError(f"글자 크기는 1~200pt: {s}")
+        char["Height"] = int(float(s) * 100)
+    if f := item.get("font"):
+        char.update(FaceNameHangul=str(f), FaceNameLatin=str(f), FontTypeHangul=1, FontTypeLatin=1)
+    if a := item.get("align"):
+        if a not in ALIGN:
+            raise ValueError(f"정렬은 {'/'.join(ALIGN)}: {a}")
+        para["AlignType"] = ALIGN[a]
+    if ls := item.get("line_spacing"):
+        if not 50 <= int(ls) <= 500:
+            raise ValueError(f"줄 간격은 50~500%: {ls}")
+        para.update(LineSpacingType=0, LineSpacing=int(ls))  # 0 = 글자에 따라(%)
+    # 문단 여백·들여쓰기: 한글 값은 1mm = 567(HWPUNIT×2)이고 **홀수면 다른 단위로 읽힘** → 짝수로 (2026-11-11 쪽 그림으로 측정)
+    for k, key, low in (("left_margin_mm", "LeftMargin", 0), ("right_margin_mm", "RightMargin", 0),
+                        ("indent_mm", "Indentation", -100)):
+        if k in item:
+            mm = float(item[k])
+            if not low <= mm <= 100:
+                raise ValueError(f"{k}는 {low}~100mm: {mm}")
+            para[key] = 2 * round(mm * MM)
+    if not char and not para:
+        raise ValueError("바꿀 서식이 없음")
+    return char, para
 
 
 def _safe(fn):
@@ -29,11 +81,36 @@ def _safe(fn):
 
 
 class Tools:
-    def __init__(self, bridge, session_path: Path, scoped: bool = False, personal: bool = False) -> None:
+    def __init__(self, bridge, session_path: Path, scoped: bool = False, personal: bool = False,
+                 files: list[str] = (), attached: Path | None = None) -> None:
         self.b = bridge
         self.s = Path(session_path)
         self.scoped = scoped  # 그림을 첨부한 요청: 그림 부분만 (위치 없는 수정 거부, 문서 전체 점검 안 함)
         self.personal = personal  # 사용자가 패널에서 이번 요청만 보호 해제를 허용함 (개인정보·표 줄 삭제/추가)
+        self.files = [f for f in files if f]  # 이번 요청에 첨부한 그림 — 문서에 넣을 수 있는 그림은 이것뿐
+        self.attached = attached  # 첨부 문서에서 뽑은 글 (비교용)
+
+    def _done(self, label: str, at: str = "", marks: list[str] = (), undo: list | None = None,
+              redo: list | None = None) -> dict:
+        """서식·표·넣기처럼 글 바꾸기가 아닌 수정 — 패널 '바꾼 곳'에 이름표로.
+        undo/redo = 패널이 ↶·↷에서 자기 HwpBridge로 실행할 [{"op": 메서드, "args": [...]}] (없으면 한글 Ctrl+Z로만)."""
+        d = {"label": label, "at": at, "marks": [m for m in marks if m]}
+        if undo and redo:
+            d.update(undo=undo, redo=redo)
+        session.write(self.s, "done", d)
+        return d
+
+    def _where(self, find: str, lines, doc: str) -> tuple[str, tuple | None, str | None]:
+        """(문서의 실제 문구, 몇 번째들, 안 되는 이유) — 위치를 받는 새 도구들의 공통 검사."""
+        find = resolve_text(find or "", doc)
+        nths, _ = self._target(find, lines, doc)
+        if not find or find not in doc or nths == ():
+            return find, nths, "문서에서 찾지 못함" + (" (지정한 줄에 없음)" if nths == () else "")
+        if nths is None and self.scoped:
+            return find, nths, "첨부한 그림 부분만 고치는 요청이라 줄 번호(lines)가 필요함"
+        if nths is None and is_vague(find):
+            return find, nths, "짧은 문구라 줄 번호(lines)가 필요함"
+        return find, nths, None
 
     def _check(self, text: str, note: str) -> dict:
         text = resolve_text(text, self.b.read_text())  # 띄어쓰기가 달라도 문서의 실제 문구로 표시
@@ -158,6 +235,182 @@ class Tools:
                 session.write(self.s, "rows", item)
         return {"done": done, "failed": failed}
 
+    @_safe
+    def format_text(self, items: list[dict]) -> dict:
+        doc = self.b.read_text()
+        done, failed = [], []
+        for it in items:
+            find, nths, why = self._where(it.get("find", ""), it.get("lines"), doc)
+            try:
+                char, para = shapes(it)
+            except (ValueError, TypeError) as e:
+                why = why or str(e)
+            if why:
+                failed.append({"find": find, "error": why})
+                continue
+            old = self.b.shapes_of(find, nths, list(char), list(para))
+            n = self.b.format_text(find, nths, char, para)
+            what = ", ".join(f"{k}={it[k]}" for k in ("bold", "italic", "underline", "strike", "color", "size", "font",
+                                                      "align", "line_spacing", "left_margin_mm", "right_margin_mm",
+                                                      "indent_mm") if k in it)
+            (done if n else failed).append({"find": find, "count": n} if n else {"find": find, "error": "한글에서 찾지 못함"})
+            if n:
+                self._done(f"서식({what}): {find}", find,
+                           undo=[{"op": "format_text", "args": [find, [k], c, p]} for k, c, p in old],
+                           redo=[{"op": "format_text", "args": [find, None if nths is None else list(nths), char, para]}])
+        return {"done": done, "failed": failed}
+
+    def _anchor(self, find: str, lines, doc: str) -> tuple[str, int]:
+        find = resolve_text(find or "", doc)
+        nths, _ = self._target(find, lines, doc)
+        return find, (nths or (0,))[0]
+
+    @_safe
+    def read_table(self, find: str, lines: list[int] | None = None) -> dict:
+        find, nth = self._anchor(find, lines, self.b.read_text())
+        r = self.b.read_table(find, nth)
+        if "error" in r:
+            return r
+        rows: dict[str, list[str]] = {}
+        for addr, text in r["cells"]:
+            rows.setdefault(re.sub(r"\D", "", addr), []).append(f"{addr}: {' '.join(text.split())}")
+        return {"rows": [" | ".join(v) for v in rows.values()]}
+
+    @_safe
+    def edit_table(self, ops: list[dict]) -> dict:
+        done, failed, checks = [], [], []
+        for op in ops:  # 열을 지우면 칸 주소가 바뀌므로 받은 순서대로, 매번 새로 읽는다
+            doc = self.b.read_text()
+            a = op.get("action", "")
+            find, nth = self._anchor(op.get("find", ""), op.get("lines"), doc)
+            op = {**op, "find": find}
+            why = None if find and find in doc else "find 글을 문서에서 찾지 못함"
+            if not why and a == "delete_col" and not self.personal:  # 표 줄 지우기처럼 내용이 사라짐 → 허락
+                checks.append(self._check(find, f"{PERMIT_NOTE} (표 열 지우기)"))
+                why = PERMIT_NOTE
+            old = self.b.cell_text(find, nth, op.get("cell", "")) if not why and a == "set_cell" else None
+            if not why and a == "set_cell" and not self.personal:
+                if old and (reason := is_protected(old, old)):
+                    checks.append(self._check(old, f"{PROTECTED_NOTE}: {reason}"))
+                    why = PERMIT_NOTE
+            why = why or self.b.table_op(op, nth)
+            item = {"action": a, "cell": op.get("cell", ""), "find": find}
+            if why:
+                failed.append({**item, "error": why})
+                continue
+            done.append(item)
+            text = str(op.get("text", ""))
+            marks = text.splitlines() if a == "set_cell" else [str(v) for r in op.get("rows") or [] for v in r]
+            self._done(f"표 {TABLE_KO.get(a, a)} {op.get('cell', '')}".rstrip() + (f": {text}" if text else ""),
+                       (marks or [find])[0], marks, self._table_undo(op, nth, old, text),
+                       [{"op": "table_op", "args": [op, nth]}])
+        return {"done": done, "failed": failed, "checks": checks}
+
+    def _table_undo(self, op: dict, nth: int, old: str | None, text: str) -> list | None:
+        """표 작업 되돌리기: 칸 채우기 → 예전 글, 열 넣기 → 그 열 지우기, 새 표 → 그 표 지우기. 칸 합치기·열 지우기는 없음."""
+        a, cell = op.get("action"), str(op.get("cell", "")).upper()
+        if a == "create":
+            return self.b.undo_spec
+        m = re.fullmatch(r"([A-Z]+)(\d+)", cell)
+        if not m:
+            return None
+        find = op["find"]
+        if a == "set_cell":
+            if find not in self.b.read_text():  # 기준 글이 든 칸을 바꿨으면 새 글로 그 표를 찾음
+                find = (text.splitlines() or [""])[0]
+            undo_op = {"action": "set_cell", "find": find, "cell": cell, "text": old or "", "mark": False}
+            return [{"op": "table_op", "args": [undo_op, nth]}] if find and old is not None else None
+        if a in ("insert_col_left", "insert_col_right"):  # 왼쪽에 넣으면 새 열이 그 자리, 오른쪽이면 다음 열
+            n = sum((ord(ch) - 64) * 26 ** i for i, ch in enumerate(reversed(m[1]))) + (a == "insert_col_right")
+            col = ""
+            while n:
+                n, r = divmod(n - 1, 26)
+                col = chr(65 + r) + col
+            undo_op = {"action": "delete_col", "find": find, "cell": f"{col}{m[2]}", "width": self.b.table_width_before}
+            return [{"op": "table_op", "args": [undo_op, nth]}]
+        return None
+
+    @_safe
+    def insert_content(self, items: list[dict]) -> dict:
+        done, failed, checks = [], [], []
+        for it in items:
+            doc = self.b.read_text()
+            kind, text = it.get("kind", ""), str(it.get("text", ""))
+            find, nth, why, picture = "", 0, None, ""
+            if kind not in NO_FIND:
+                find, nths, why = self._where(it.get("find", ""), it.get("lines"), doc)
+                nth = (nths or (0,))[0]
+            if not why and kind == "delete_paragraph":
+                para = self.b.paragraph_of(find, nth)
+                if para is None:
+                    why = "표 칸 안이거나 찾지 못함 — 표는 edit_table로"
+                elif not self.personal and (reason := is_protected(para, para)):
+                    checks.append(self._check(find, f"{PROTECTED_NOTE}: {reason}"))
+                    why = PERMIT_NOTE
+            if not why and kind in ("picture", "replace_picture"):
+                want = Path(str(it.get("file", ""))).name
+                picture = next((f for f in self.files if Path(f).name == want or len(self.files) == 1 and not want), "")
+                why = None if picture else "이번 요청에 첨부한 그림만 넣을 수 있음"
+            if kind == "memo" and find:  # 메모는 문단 전체에 달리므로 어느 글에 대한 메모인지 앞에 적음
+                it = {**it, "text": f"[{find[:30]}] {text}"}
+            why = why or self.b.insert({**it, "find": find}, nth, picture)
+            item = {"kind": kind, "find": find}
+            if why:
+                failed.append({**item, "error": why})
+                continue
+            done.append(item)
+            label = INSERT_KO.get(kind, kind) + (f": {text}" if text else f" ({find})" if find else "")
+            self._done(label[:80], text.splitlines()[0] if kind == "paragraph" and text.strip() else find,
+                       text.splitlines() if kind == "paragraph" else [], self.b.undo_spec,
+                       [{"op": "insert", "args": [{**it, "find": find}, nth, picture]}])
+        return {"done": done, "failed": failed, "checks": checks}
+
+    @_safe
+    def fill_fields(self, values: dict[str, str] | None = None) -> dict:
+        current = self.b.fields()
+        if not values:
+            return {"fields": current}
+        done, failed, checks = [], [], []
+        for name, text in values.items():
+            old = current.get(name)
+            if old is None:
+                failed.append({"name": name, "error": "그런 누름틀이 없음"})
+            elif old.strip() and not self.personal and (reason := is_protected(old, old)):
+                checks.append(self._check(old, f"{PROTECTED_NOTE}: {reason}"))
+                failed.append({"name": name, "error": PERMIT_NOTE})
+            else:
+                self.b.put_field(name, str(text))
+                done.append(name)
+                self._done(f"누름틀 {name}: {text}", str(text), undo=[{"op": "put_field", "args": [name, old]}],
+                           redo=[{"op": "put_field", "args": [name, str(text)]}])
+        return {"done": done, "failed": failed, "checks": checks}
+
+    @_safe
+    def page_image(self, page: int = 1) -> bytes | dict:
+        try:
+            return self.b.page_png(int(page), tempfile.gettempdir())
+        except ValueError as e:
+            return {"error": str(e)}
+
+    def compare_attachment(self, name: str = "") -> dict:
+        """첨부 문서 글과 열린 문서의 다른 줄 (- 첨부에만, + 열린 문서에만)."""
+        try:
+            raw = self.attached.read_text(encoding="utf-8") if self.attached else ""
+        except OSError:
+            raw = ""
+        blocks = dict(re.findall(r"\[첨부 파일: ([^\]\n]+)\]\n(.*?)(?=\n\n\[첨부 파일: |\Z)", raw, re.S))
+        pick = next((k for k in blocks if name and name in k), next(iter(blocks), None))
+        if pick is None:
+            return {"error": "이번 요청에 첨부한 문서가 없음"}
+        try:
+            doc = self.b.read_text()
+        except HwpNotAvailable as e:
+            return {"error": str(e) or NO_HWP}
+        norm = lambda t: [" ".join(x.split()) for x in t.splitlines() if x.strip()]  # noqa: E731
+        diff = [d for d in difflib.unified_diff(norm(blocks[pick]), norm(doc), lineterm="", n=0)
+                if d[:1] in "+-" and not d.startswith(("+++", "---"))]
+        return {"attachment": pick, "diff": diff[:150], "more": max(0, len(diff) - 150)}
+
 
 def main() -> None:
     from mcp.server.fastmcp import FastMCP
@@ -166,8 +419,10 @@ def main() -> None:
     from .hwp_bridge import HwpBridge
 
     bridge = HwpBridge(ComWorker())
+    attached = os.environ.get("HWPGPT_ATTACHED")
     t = Tools(bridge, Path(os.environ.get("HWPGPT_SESSION", "session.jsonl")), os.environ.get("HWPGPT_SCOPED") == "1",
-              os.environ.get("HWPGPT_PERSONAL") == "1")
+              os.environ.get("HWPGPT_PERSONAL") == "1", os.environ.get("HWPGPT_FILES", "").split(os.pathsep),
+              Path(attached) if attached else None)
 
     def connected(fn):
         @functools.wraps(fn)
@@ -224,6 +479,63 @@ def main() -> None:
         여러 곳이면 위에서부터가 아니라 **아래쪽 줄부터** 적는다(지운 뒤 위치가 밀리지 않게).
         사용자 허락([보호 해제 허용])이 없는 요청이면 바뀌지 않고 checks로 돌아온다 — 그때는 답변을 [[권한 확인]] 한 줄로."""
         return t.edit_table_rows(rows)
+
+    @mcp.tool()
+    @connected
+    def format_text(items: list[dict]) -> dict:
+        """글자·문단 서식. items = [{"find": 글, "lines": [줄번호], "bold"/"italic"/"underline"/"strike": true|false,
+        "color": "#RRGGBB", "size": pt, "font": 글꼴 이름, "align": left|center|right|justify|distribute,
+        "line_spacing": %, "left_margin_mm"/"right_margin_mm": 문단 여백, "indent_mm": 첫 줄 들여쓰기(음수 = 내어쓰기)}].
+        정렬·줄 간격·여백·들여쓰기는 그 글이 든 문단 전체에. 사용자가 서식을 말했을 때만 쓴다."""
+        return t.format_text(items)
+
+    @mcp.tool()
+    @connected
+    def read_table(find: str, lines: list[int] | None = None) -> dict:
+        """find(표 칸의 글)가 든 표를 칸 주소(A1, B2…)와 함께 줄별로. 표 칸을 고치기 전에 쓴다."""
+        return t.read_table(find, lines)
+
+    @mcp.tool()
+    @connected
+    def edit_table(ops: list[dict]) -> dict:
+        """표 작업. ops = [{"action", "find": 그 표 칸의 글(read_table에 쓴 것), "lines", "cell": "B3", ...}].
+        set_cell(cell, text: 칸 글 전체를 바꿈) · insert_col_left/insert_col_right(cell 옆) · delete_col(허락 필요) ·
+        merge(cell~"to": "C3") · create(find 문단 아래 새 표, "rows": [[칸, …], …]). 줄 지우기·추가는 edit_table_rows."""
+        return t.edit_table(ops)
+
+    @mcp.tool()
+    @connected
+    def insert_content(items: list[dict]) -> dict:
+        """넣기·지우기. items = [{"kind", "find": 기준 글, "lines", "text"}].
+        paragraph(find 문단 아래 새 문단, 여러 줄 가능) · delete_paragraph(find 문단) · page_break(find 문단 뒤) ·
+        picture(find 문단 아래, "file": 첨부 그림 이름, "width_mm", "in_cell": true면 find가 든 표 칸 안에,
+        "cell": "A2"면 find가 든 표의 그 칸 안에 — 빈 칸은 이것으로) ·
+        replace_picture("picture_no": 문서 몇 번째 그림, "file": 첨부 그림 — 같은 폭으로 바꿈) · footnote(find 글 뒤) ·
+        memo(find가 든 문단에 메모, 메모 앞에 [find]가 붙음) · header/footer(text) · page_number("position": bottom_center 등).
+        find·lines 없이: header·footer·page_number·replace_picture."""
+        return t.insert_content(items)
+
+    @mcp.tool()
+    @connected
+    def fill_fields(values: dict[str, str] | None = None) -> dict:
+        """누름틀(양식 칸). values 없이 부르면 {이름: 지금 글}, values={이름: 글}이면 채운다."""
+        return t.fill_fields(values)
+
+    @mcp.tool()
+    @connected
+    def page_image(page: int = 1):
+        """page쪽을 그림으로 본다 (표·그림·배치가 제대로 됐는지 눈으로 확인할 때만, 토큰이 많이 듦)."""
+        from mcp.server.fastmcp import Image
+
+        r = t.page_image(page)
+        return r if isinstance(r, dict) else Image(data=r, format="png")
+
+    @mcp.tool()
+    def compare_attachment(name: str = "") -> dict:
+        """첨부한 문서(name: 파일 이름 일부)와 열린 문서의 다른 줄. - 첨부에만 / + 열린 문서에만."""
+        if bridge._h is None:
+            bridge.connect()
+        return t.compare_attachment(name)
 
     mcp.run()
 

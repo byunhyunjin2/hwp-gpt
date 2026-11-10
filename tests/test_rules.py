@@ -164,3 +164,13 @@ def test_para_kind_groups_same_bullets():
     near = [(4, "□ 개요"), (6, " ○ 장소: OO구"), (3, " ○ 일시: 2027. 10. 30.")]
     assert same_kind_neighbor(" ○ 대상: 주민 누구나", near) == 6
     assert same_kind_neighbor("제목 줄", near) is None
+
+
+def test_personal_keyword_only_as_label():
+    from hwpgpt.rules import _is_personal
+
+    for t in ("담당자: 홍길동", "연락처", "○ 성명 홍길동", "전화번호 : 02-000-0000", "이메일 주소: a@b.c", "주소"):
+        assert _is_personal(t), t
+    # 낱말이 다른 말의 일부거나 문장 가운데 쓰이면 막지 않음 (2026-11-11 점검)
+    for t in ("주소지 이전 안내", "전화위복의 계기", "사업 성명서 배포", "행사 연락처 확인 방법 안내 예정"):
+        assert not _is_personal(t), t
