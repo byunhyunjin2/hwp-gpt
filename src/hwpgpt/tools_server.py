@@ -26,6 +26,9 @@ INSERT_KO = {"paragraph": "새 문단", "delete_paragraph": "문단 지우기", 
              "footnote": "각주", "memo": "메모", "header": "머리말", "footer": "꼬리말", "page_number": "쪽 번호",
              "replace_picture": "그림 바꾸기"}
 NO_FIND = ("header", "footer", "page_number", "replace_picture")  # 기준 글 없이 하는 넣기
+PREVIEW_NOTE = "미리 보기: 아직 문서를 바꾸지 않았음 — 사용자가 패널에서 고른 것만 적용됨. 답변은 제안 요약만"
+PREVIEW_ONLY_TEXT = {"error": "미리 보기 중이라 서식·표·넣기는 하지 않음 — 글 바꾸기(apply_edits)만 제안하고, "
+                              "나머지는 사용자에게 미리 보기를 끄고 다시 요청하라고 답한다"}
 
 
 def shapes(item: dict) -> tuple[dict, dict]:
@@ -83,9 +86,10 @@ def _safe(fn):
 
 class Tools:
     def __init__(self, bridge, session_path: Path, scoped: bool = False, personal: bool = False,
-                 files: list[str] = (), attached: Path | None = None) -> None:
+                 files: list[str] = (), attached: Path | None = None, preview: bool = False) -> None:
         self.b = bridge
         self.s = Path(session_path)
+        self.preview = preview  # 고치기 전 미리 보기: 글 바꾸기는 제안만, 서식·표·넣기는 하지 않음
         self.scoped = scoped  # 그림을 첨부한 요청: 그림 부분만 (위치 없는 수정 거부, 문서 전체 점검 안 함)
         self.personal = personal  # 사용자가 패널에서 이번 요청만 보호 해제를 허용함 (개인정보·표 줄 삭제/추가)
         self.files = [f for f in files if f]  # 이번 요청에 첨부한 그림 — 문서에 넣을 수 있는 그림은 이것뿐
@@ -185,6 +189,16 @@ class Tools:
             items.append(Edit(find, e.get("replace", ""), e.get("reason", ""), nths, ctx))
             lines_of[id(items[-1])] = e.get("lines")
         ok, rejected = validate_edits(doc, items, need_lines=self.scoped, personal=self.personal)
+        if self.preview:  # 바꾸지 않고 제안만 — 사용자가 패널에서 고른 것만 패널이 적용한다
+            proposed = []
+            for e in ok:
+                p = {"find": e.find, "replace": e.replace, "reason": e.reason,
+                     "nths": None if e.nths is None else list(e.nths),
+                     "count": doc.count(e.find) if e.nths is None else len(e.nths)}
+                session.write(self.s, "proposed", p)
+                proposed.append(p)
+            return {"applied": [], "proposed": proposed, "checks": [self._check(c.text, c.note) for c in rejected],
+                    "note": PREVIEW_NOTE}
         applied = []
         for e, n, pos in self.b.apply(ok) if ok else []:
             if not n and strip_unit(e.find) and strip_unit(e.replace):  # 표 칸의 '원'이 떨어져 있으면 숫자만으로
@@ -218,6 +232,8 @@ class Tools:
     @_safe
     def edit_table_rows(self, rows: list[dict]) -> dict:
         """표 줄 지우기·추가. 표 모양을 바꾸므로 사용자가 패널에서 허락한 요청에서만 (아니면 패널이 허락을 묻는다)."""
+        if self.preview:
+            return PREVIEW_ONLY_TEXT
         if not self.personal:
             return {"done": [], "checks": [self._check(r.get("find", ""), f"{PROTECTED_NOTE}: 표 줄 삭제·추가는 사용자 허락이 필요함")
                                            for r in rows[:1]]}
@@ -241,6 +257,8 @@ class Tools:
 
     @_safe
     def format_text(self, items: list[dict]) -> dict:
+        if self.preview:
+            return PREVIEW_ONLY_TEXT
         doc = self.b.read_text()
         done, failed = [], []
         for it in items:
@@ -292,6 +310,8 @@ class Tools:
 
     @_safe
     def edit_table(self, ops: list[dict]) -> dict:
+        if self.preview:
+            return PREVIEW_ONLY_TEXT
         done, failed, checks = [], [], []
         for op in ops:  # 열을 지우면 칸 주소가 바뀌므로 받은 순서대로, 매번 새로 읽는다
             doc = self.b.read_text()
@@ -350,6 +370,8 @@ class Tools:
 
     @_safe
     def insert_content(self, items: list[dict]) -> dict:
+        if self.preview:
+            return PREVIEW_ONLY_TEXT
         done, failed, checks = [], [], []
         for it in items:
             doc = self.b.read_text()
@@ -388,6 +410,8 @@ class Tools:
         current = self.b.fields()
         if not values:
             return {"fields": current}
+        if self.preview:
+            return PREVIEW_ONLY_TEXT
         done, failed, checks = [], [], []
         for name, text in values.items():
             old = current.get(name)
@@ -440,7 +464,7 @@ def main() -> None:
     attached = os.environ.get("HWPGPT_ATTACHED")
     t = Tools(bridge, Path(os.environ.get("HWPGPT_SESSION", "session.jsonl")), os.environ.get("HWPGPT_SCOPED") == "1",
               os.environ.get("HWPGPT_PERSONAL") == "1", os.environ.get("HWPGPT_FILES", "").split(os.pathsep),
-              Path(attached) if attached else None)
+              Path(attached) if attached else None, os.environ.get("HWPGPT_PREVIEW") == "1")
 
     def connected(fn):
         @functools.wraps(fn)

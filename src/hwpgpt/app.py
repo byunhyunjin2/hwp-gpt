@@ -13,12 +13,15 @@ from .com_worker import ComWorker
 from .dock import Docker, EmbedDocker, find_hwp_window, place_right
 from .hwp_bridge import RED, HwpBridge, HwpNotAvailable
 from .memory import MemoryStore
-from .rules import AMOUNT_NOTES, PROTECTED_NOTE, amount_checks, changed_years, leftover_years, resolve_text, touches_amount
+from .rules import (AMOUNT_NOTES, PROTECTED_NOTE, Edit, amount_checks, changed_years, leftover_years, resolve_text,
+                    review_document, touches_amount)
 from .tools_server import NO_MARK_NOTES
 
 TITLE = "HWP_GPT"
+DEFAULT_PRESETS = ["올해 학년도로 연도를 바꿔줘", "고치지 말고 맞춤법·띄어쓰기만 확인해서 표시해줘",
+                   "금액·합계·날짜 요일이 맞는지 확인만 해줘"]  # 자주 쓰는 요청 버튼 (사용자가 더하고 뺀다)
 LOGIN_TIMEOUT = 300  # 초 — 브라우저 로그인을 기다리는 시간
-UNDO_OPS = {"format_text", "table_op", "insert", "put_field", "delete_ctrl_at", "delete_para_at"}  # ↶·↷에 쓰는 HwpBridge 메서드
+UNDO_OPS = {"format_text", "table_op", "insert", "put_field", "delete_ctrl_at", "delete_para_at", "append_table"}  # ↶·↷에 쓰는 HwpBridge 메서드
 UI = Path(__file__).resolve().parent / "ui" / "index.html"
 ICON = Path(__file__).resolve().parent / "assets" / "hwpgpt.ico"  # 창 제목줄 (개발판도 병아리)
 
@@ -49,6 +52,7 @@ class Api:
         self._update: dict = {}
         self._log: dict[str, dict] = {}  # 항목별 되돌리기: 번호 → 바꾼 기록(자리 포함)
         self._undone: list[str] = []      # 되돌린 수정 — 다음 요청에 AI에게 알림
+        self._proposed: dict[str, dict] = {}  # 미리 보기: 번호 → 제안된 글 바꾸기 (고르면 적용)
         attachments.clear_pasted(paths.pasted_dir())
         attachments.clear_pasted(paths.session_dir())
         self._limits = cr.read_rate_limits()
@@ -62,8 +66,13 @@ class Api:
         return self._mode
 
     def set_setting(self, key: str, value: str) -> dict:
-        """theme: dark|light, model: Codex 모델 이름(빈 값 = Codex 기본)."""
-        if key in ("theme", "model"):
+        """theme: dark|light, model: Codex 모델 이름(빈 값 = Codex 기본), preview: 고치기 전 미리 보기(bool),
+        presets: 자주 쓰는 요청 목록."""
+        if key == "presets":
+            value = [" ".join(str(s).split())[:200] for s in value or [] if str(s).strip()][:20]
+        elif key == "preview":
+            value = bool(value)
+        if key in ("theme", "model", "preview", "presets"):
             self._settings[key] = value
             _save_settings(self._settings)
         return self._settings
@@ -100,6 +109,7 @@ class Api:
             self._bridge._marks.clear()  # 이전 문서의 형광펜은 그 문서에 그대로 둠
             self._bridge._cleared = {}
             self._log = {}  # 되돌리기는 같은 문서에서만
+            self._proposed = {}
         self._target = target
 
     # --- 기억 학습 (Task 9) ---
@@ -170,7 +180,7 @@ class Api:
             "busy": self._busy.locked(), "usage": self._last_usage,
             "candidates": self._pop_candidates(),
             "mode": self._mode, "limits": self._limits, "version": __version__,
-            "settings": self._settings, "models": self._models,
+            "settings": {"presets": DEFAULT_PRESETS, **self._settings}, "models": self._models,
         }
 
     def login_start(self) -> str:
@@ -259,7 +269,7 @@ class Api:
             images, attached, notes = attachments.prepare(files or [])
             r = cr.run_turn(self._with_undo_note(text), self._rules_for_prompt(), self._thread_id, on_progress=self._on_progress,
                             model=self._settings.get("model") or None, images=images, attached=attached,
-                            personal=personal)
+                            personal=personal, preview=bool(self._settings.get("preview")))
             pairs = [(a["find"], a["replace"]) for a in r.applied if a.get("count")]
             if not images:  # 그림을 첨부한 요청은 그 부분만 — 문서 전체 점검(옛 연도·금액)을 하지 않음
                 r.checks += self._leftover_checks(r.applied, r.checks)
@@ -281,8 +291,12 @@ class Api:
                 if a.get("count") or a.get("undo"):
                     a["id"] = uuid.uuid4().hex[:8]
                     self._log[a["id"]] = a
+            for p in r.proposed:  # 미리 보기: 패널에서 고르면 apply_proposed로 적용
+                p["id"] = uuid.uuid4().hex[:8]
+                self._proposed[p["id"]] = p
             ask = not personal and (cr.asks_permission(r.reply) or any(c.get("note", "").startswith(PROTECTED_NOTE) for c in r.checks))
             return {"reply": cr.strip_permission(r.reply), "changes": r.applied, "checks": r.checks, "done": r.done,
+                    "proposed": r.proposed,
                     "askPersonal": ask,
                     "docType": self._doc_type, "error": r.error, "usage": r.usage,
                     "candidates": self._pop_candidates(), "attachNotes": notes}
@@ -359,6 +373,78 @@ class Api:
         if not undo and ok and self._bridge.undo_spec:  # 다시 넣었으면 자리가 새로 생김 → 다음 ↶는 새 자리로
             rec["undo"] = self._bridge.undo_spec
         return ok, bad
+
+    # --- 미리 보기 · 문서 검토 · 신구대조표 ---
+    def apply_proposed(self, ids: list[str]) -> dict:
+        """미리 보기 목록에서 고른 글 바꾸기만 적용 (AI 없이). 결과는 보내기와 같은 꼴 → 화면이 '바꾼 곳'으로."""
+        picked = [self._proposed.pop(i) for i in ids if i in self._proposed]
+        if not picked:
+            return {"error": "적용할 항목이 없습니다 (이미 적용했거나 다른 문서로 바뀜)"}
+        if not self._busy.acquire(blocking=False):
+            for p in picked:
+                self._proposed[p["id"]] = p
+            return {"error": "요청 처리가 끝난 뒤 눌러 주세요"}
+        try:
+            edits = [Edit(p["find"], p["replace"], p.get("reason", ""), None if p.get("nths") is None else tuple(p["nths"]))
+                     for p in picked]
+            changes = []
+            for e, n, pos in self._bridge.apply(edits):
+                a = {"find": e.find, "replace": e.replace, "count": n, "pos": pos}
+                if n:
+                    a["id"] = uuid.uuid4().hex[:8]
+                    self._log[a["id"]] = a
+                changes.append(a)
+            pairs = [(a["find"], a["replace"]) for a in changes if a["count"]]
+            checks = self._final_checks(self._leftover_checks(changes, []), touches_amount(pairs))
+            self._bridge.remember_marks([a["replace"] for a in changes if a["count"]])
+            self._bridge.remember_marks([c["text"] for c in checks], RED)
+            self._snapshot = self._bridge.read_text()
+            self._undone.append(f"미리 보기 제안 중 {len(pairs)}개를 사용자가 골라 적용함")
+            return {"changes": changes, "checks": checks}
+        except HwpNotAvailable:
+            return {"error": "한글 문서를 열어 주세요"}
+        finally:
+            self._busy.release()
+
+    def review(self) -> dict:
+        """[문서 검토]: AI 없이 규칙으로 문서 전체 점검 — 고치지 않고 빨간 표시와 확인 목록만 (사용량 0)."""
+        if not self._busy.acquire(blocking=False):
+            return {"error": "요청 처리가 끝난 뒤 눌러 주세요"}
+        try:
+            checks = [{"text": c.text, "note": c.note} for c in review_document(self._bridge.read_text())]
+            for c in checks:
+                self._bridge.mark_check(c["text"])
+            self._bridge.remember_marks([c["text"] for c in checks], RED)
+            return {"checks": checks}
+        except HwpNotAvailable:
+            return {"error": "한글 문서를 열어 주세요"}
+        finally:
+            self._busy.release()
+
+    def change_table(self) -> dict:
+        """[신구대조표]: 이 문서에서 바꾼 글(되돌리지 않은 것)을 문서 끝에 '수정 전 | 수정 후' 표로. ↶로 뺄 수 있다."""
+        recs = [r for r in self._log.values() if "replace" in r and r.get("count") and not r.get("undone")]
+        if not recs:
+            return {"error": "표로 만들 바꾼 글이 없습니다 (이 문서에서 패널로 바꾼 것만)"}
+        if not self._busy.acquire(blocking=False):
+            return {"error": "요청 처리가 끝난 뒤 눌러 주세요"}
+        try:
+            rows = [["연번", "수정 전", "수정 후", "곳"]] + [[str(i), r["find"], r["replace"], str(r["count"])]
+                                                        for i, r in enumerate(recs, 1)]
+            title = "변경 신구대조표 (" + time.strftime("%Y. %m. %d.") + ")"
+            why = self._bridge.append_table(title, rows)
+            if why:
+                return {"error": why}
+            d = {"label": f"신구대조표 {len(recs)}건 (문서 끝)", "at": title, "marks": [],
+                 "undo": self._bridge.undo_spec, "redo": [{"op": "append_table", "args": [title, rows]}],
+                 "id": uuid.uuid4().hex[:8]}
+            self._log[d["id"]] = d
+            self._snapshot = self._bridge.read_text()
+            return {"done": [d]}
+        except HwpNotAvailable:
+            return {"error": "한글 문서를 열어 주세요"}
+        finally:
+            self._busy.release()
 
     def new_conversation(self) -> None:
         self._thread_id = None

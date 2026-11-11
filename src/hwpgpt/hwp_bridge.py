@@ -613,6 +613,44 @@ class HwpBridge:
 
         return self._call(do)
 
+    def _make_table(self, h, rows: list) -> str | None:
+        """커서가 있는 문단 아래에 rows 표를 새로 만들고 칸을 채운다. undo_spec = 그 표 지우기."""
+        cols = max(len(r) for r in rows)
+        h.HAction.Run("MoveParaEnd")
+        h.HAction.Run("BreakPara")
+        t = h.HParameterSet.HTableCreation
+        h.HAction.GetDefault("TableCreate", t.HSet)
+        t.Rows, t.Cols = len(rows), cols
+        t.WidthType = 0  # 0 = 본문(단) 폭에 맞춤. 기본값이면 열마다 21.6mm로 좁게 만들어짐 (2026-11-11 시험)
+        lst, para, _ = h.GetPos()
+        at_end = self._para_text(h, lst, para + 1) is None  # 문서 끝에 표를 넣으면 한글이 뒤에 빈 문단을 더 만듦
+        h.SetPos(lst, para, 0)
+        if not h.HAction.Execute("TableCreate", t.HSet):
+            return "한글이 표 만들기를 거부함"
+        self.undo_spec = [{"op": "delete_ctrl_at", "args": ["tbl", *self._anchor(h.ParentCtrl), 2 if at_end else 1]}]
+        cells = [str(v) for r in rows for v in list(r) + [""] * (cols - len(r))]
+        for i, v in enumerate(cells):
+            self._type_lines(h, v)
+            if i < len(cells) - 1:
+                h.HAction.Run("TableRightCell")
+        return None
+
+    def append_table(self, title: str, rows: list) -> str | None:
+        """문서 맨 끝에 제목 문단 + 표 (신구대조표). undo_spec = 표 지우기 → 제목 문단 지우기."""
+        self.undo_spec = None
+
+        def do(h):
+            h.HAction.Run("Cancel")
+            h.HAction.Run("MoveDocEnd")  # 본문 맨 끝 (표 칸 안이 아님)
+            h.HAction.Run("BreakPara")
+            spots = self._type_lines(h, title)
+            why = self._make_table(h, rows)
+            if why is None:
+                self.undo_spec = self.undo_spec + [{"op": "delete_para_at", "args": [*spots[0], title]}]
+            return why
+
+        return self._call(do)
+
     def table_op(self, op: dict, nth: int = 0) -> str | None:
         """표 작업 하나. op = {"action", "find"(표 칸 글), "cell", "text", "to", "rows"}. 안 되면 이유.
         set_cell · insert_col_left · insert_col_right · delete_col · merge(cell~to) · create(find 문단 아래에 rows 표)."""
@@ -622,28 +660,10 @@ class HwpBridge:
         def do(h):
             if a == "create":
                 rows = op.get("rows") or []
-                cols = max((len(r) for r in rows), default=0)
-                if not rows or not cols or not self._seek(h, find, nth):
+                if not rows or not any(rows) or not self._seek(h, find, nth):
                     return "rows가 비었거나 find 문단을 찾지 못함"
                 h.HAction.Run("Cancel")
-                h.HAction.Run("MoveParaEnd")
-                h.HAction.Run("BreakPara")
-                t = h.HParameterSet.HTableCreation
-                h.HAction.GetDefault("TableCreate", t.HSet)
-                t.Rows, t.Cols = len(rows), cols
-                t.WidthType = 0  # 0 = 본문(단) 폭에 맞춤. 기본값이면 열마다 21.6mm로 좁게 만들어짐 (2026-11-11 시험)
-                lst, para, _ = h.GetPos()
-                at_end = self._para_text(h, lst, para + 1) is None  # 문서 끝에 표를 넣으면 한글이 뒤에 빈 문단을 더 만듦
-                h.SetPos(lst, para, 0)
-                if not h.HAction.Execute("TableCreate", t.HSet):
-                    return "한글이 표 만들기를 거부함"
-                self.undo_spec = [{"op": "delete_ctrl_at", "args": ["tbl", *self._anchor(h.ParentCtrl), 2 if at_end else 1]}]
-                cells = [str(v) for r in rows for v in list(r) + [""] * (cols - len(r))]
-                for i, v in enumerate(cells):
-                    self._type_lines(h, v)
-                    if i < len(cells) - 1:
-                        h.HAction.Run("TableRightCell")
-                return None
+                return self._make_table(h, rows)
             why = self._goto_addr(h, find, nth, op.get("cell", "A1"))
             if why:
                 return why

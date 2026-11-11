@@ -475,3 +475,18 @@ def test_insert_column_keeps_table_inside_text_width_and_undo_restores_width(bri
     assert before - 1000 <= bridge._call(width) <= text_w
     assert bridge.table_op({"action": "delete_col", "find": "가", "cell": "B1", "width": before}) is None
     assert abs(bridge._call(width) - before) < 600  # 1mm 단위로 늘려서 1mm 안쪽
+
+
+def test_append_change_table_at_end_and_undo_redo(bridge):
+    """신구대조표: 문서 끝에 제목+표, ↶로 제목·표 모두 빠져 원래 글로, ↷로 다시 (2026-11-11)."""
+    before = bridge.read_text()
+    rows = [["연번", "수정 전", "수정 후", "곳"], ["1", "2026년", "2027년", "1"]]
+    assert bridge.append_table("변경 신구대조표 (시험)", rows) is None
+    after = bridge.read_text()
+    assert "변경 신구대조표 (시험)" in after and "수정 전" in after and after.index("변경 신구대조표") > after.index(SAMPLE[:5])
+    assert bridge.cell_text("수정 전", 0, "C2") == "2027년"
+    undo = bridge.undo_spec
+    assert [o["op"] for o in undo] == ["delete_ctrl_at", "delete_para_at"]
+    assert _run(bridge, undo)
+    assert bridge.read_text().strip() == before.strip()
+    assert bridge.append_table("변경 신구대조표 (시험)", rows) is None and "수정 후" in bridge.read_text()

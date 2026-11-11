@@ -289,6 +289,21 @@ def amount_checks(doc_text: str) -> list[Check]:
     return check_math(doc_text) + check_table_sums(doc_text) + check_budget(doc_text)
 
 
+YEAR_TYPO_RE = re.compile(r"(?<![\d,.])((?:19|20)\d{2})\d(?=[가-힣])")  # "20260북구…" (실제 공문에서 발견)
+
+
+def review_document(doc_text: str) -> list[Check]:
+    """[문서 검토] 버튼: AI 없이 규칙만으로 문서 전체 점검 — 고치지 않고 확인할 곳만.
+    금액(계산식·표 합계·사업 예산), 요일이 달력과 다른 날짜·없는 날짜, 연도 오타(숫자 하나 더 붙음)."""
+    out = amount_checks(doc_text)
+    for m in DATE_RE.finditer(doc_text):
+        if bad := _weekday_problems(m.group(0)):
+            out.append(Check(m.group(0), "날짜 확인 — " + bad[0].split(": ", 1)[1]))
+    for m in YEAR_TYPO_RE.finditer(doc_text):
+        out.append(Check(m.group(0), f"연도 오타 의심: {m.group(0)} — {m.group(1)}?"))
+    return list({c.text: c for c in out}.values())
+
+
 def strip_unit(text: str) -> str | None:
     """'1,234,560원' → '1,234,560'. 한글 표 칸에서 '원'이 따로 떨어져 있어 찾기가 실패하는 경우용. 해당 없으면 None."""
     s = re.sub(r"\s*원$", "", text)

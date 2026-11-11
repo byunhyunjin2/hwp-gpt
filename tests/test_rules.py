@@ -203,3 +203,17 @@ def test_repeated_placeholder_needs_lines():
         assert is_vague(s), s
     for s in ("홍길동", "OO학과", "2026학년도"):
         assert not is_vague(s), s
+
+
+def test_review_document_finds_without_changing():
+    """[문서 검토]: 요일 틀린 날짜·없는 날짜·연도 오타·계산 오류를 찾고, 학번·금액·맞는 날짜는 건드리지 않음."""
+    from hwpgpt.rules import review_document
+
+    doc = ("행사일: 2027. 10. 31.(토)\n작성일: 2026. 10. 31.(토)\n없는 날 2027. 2. 30.(월)\n"
+           "지역 축제 참여(20260북구평생학습페스티벌)\n학번 202699001\n- 12,000원×35명 = 350,000원\n예산 3,677,290원")
+    got = {c.text: c.note for c in review_document(doc)}
+    assert "실제 일" in got["2027. 10. 31.(토)"]
+    assert "없는 날짜" in got["2027. 2. 30.(월)"]
+    assert got["20260"].startswith("연도 오타")
+    assert any("420,000" in n for n in got.values())
+    assert "2026. 10. 31.(토)" not in got and not any("202699001" in t for t in got)

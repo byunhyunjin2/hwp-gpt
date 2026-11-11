@@ -93,6 +93,18 @@ class FakeBridge:
     def unmark(self, texts):
         self.unmarked = list(texts)
 
+    def remember_marks(self, texts, rgb=None):
+        self.remembered = getattr(self, "remembered", []) + list(texts)
+
+    def append_table(self, title, rows):
+        self._log("append_table", title, rows)
+        self.undo_spec = [{"op": "delete_para_at", "args": [0, 9, title]}]
+        return None
+
+    def delete_para_at(self, lst, para, text):
+        self._log("delete_para", text)
+        return True
+
     def mark_check(self, text: str, nth: int | None = None) -> bool:
         self.red.append(text)
         return text in self.text

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
-Kind = Literal["applied", "check", "doc_type", "rows", "done"]
+Kind = Literal["applied", "check", "doc_type", "rows", "done", "proposed"]  # proposed = 미리 보기에서 제안만 한 수정
 
 
 def write(path: Path, kind: Kind, data: dict) -> None:

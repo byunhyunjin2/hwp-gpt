@@ -249,3 +249,58 @@ def test_undo_done_item_clears_remembered_marks_when_no_other_active(fake_bridge
     fake_bridge.text = "제목"
     assert api.undo_item("d1")["restored"] == 1 and fake_bridge._marks == {}
     assert api.redo_item("d1")["restored"] == 1 and "새 문단" in fake_bridge._marks
+
+
+def _send_ready(a, fake_bridge):
+    a._connected = lambda: True
+    a._target, a._thread_id, a._log, a._undone, a._proposed = "", None, {}, [], {}
+    a._progress, a._last_usage, a._limits = {}, None, None
+    fake_bridge.target_name = lambda: ""
+
+
+def test_preview_send_then_apply_only_picked(tmp_path, monkeypatch, fake_bridge):
+    """미리 보기 켜면 제안만 돌아오고, 고른 것만 패널이 적용 → 되돌리기 목록에도 들어감."""
+    import hwpgpt.codex_runner as cr
+
+    seen = {}
+
+    def fake_turn(text, rules, tid, preview=False, **k):
+        seen["preview"] = preview
+        return cr.TurnResult("제안했습니다", [], [], None, {}, None, "t1", proposed=[
+            {"find": "2026학년도", "replace": "2027학년도", "nths": None, "count": 1},
+            {"find": "10,000", "replace": "12,000", "nths": [0], "count": 1}])
+
+    monkeypatch.setattr(cr, "run_turn", fake_turn)
+    monkeypatch.setattr(cr, "read_rate_limits", lambda t: None)
+    fake_bridge.text = "2026학년도 계획\r\n단가 10,000"
+    a = bare_api(tmp_path, fake_bridge)
+    _send_ready(a, fake_bridge)
+    a._settings = {"preview": True}
+    r = a.send("올해로, 단가 12,000원")
+    assert seen["preview"] and len(r["proposed"]) == 2 and fake_bridge.text.startswith("2026")
+    r2 = a.apply_proposed([r["proposed"][1]["id"]])
+    assert fake_bridge.text == "2026학년도 계획\r\n단가 12,000" and r2["changes"][0]["id"] in a._log
+    assert "error" in a.apply_proposed([r["proposed"][1]["id"]])  # 두 번은 안 됨
+
+
+def test_review_marks_without_changing(tmp_path, fake_bridge):
+    fake_bridge.text = "행사일 2027. 10. 31.(토)\r\n(20260북구페스티벌)"
+    a = bare_api(tmp_path, fake_bridge)
+    r = a.review()
+    assert {c["text"] for c in r["checks"]} == {"2027. 10. 31.(토)", "20260"}
+    assert fake_bridge.red == ["2027. 10. 31.(토)", "20260"] and not fake_bridge.applied
+
+
+def test_change_table_lists_active_text_edits_and_can_undo(tmp_path, fake_bridge):
+    a = bare_api(tmp_path, fake_bridge)
+    a._undone = []
+    a._log = {"x": {"find": "2026", "replace": "2027", "count": 2, "pos": []},
+              "y": {"find": "A", "replace": "B", "count": 1, "pos": [], "undone": True},
+              "d": {"label": "서식", "undo": [], "redo": []}}
+    r = a.change_table()
+    _, title, rows = fake_bridge.calls[-1]
+    assert title.startswith("변경 신구대조표") and rows == [["연번", "수정 전", "수정 후", "곳"], ["1", "2026", "2027", "2"]]
+    d = r["done"][0]
+    assert a._log[d["id"]]["undo"] and a.undo_item(d["id"])["restored"] == 1
+    a._log = {}
+    assert "error" in a.change_table()

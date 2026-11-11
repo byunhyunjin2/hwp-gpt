@@ -169,6 +169,7 @@ class TurnResult:
     error: str | None
     thread_id: str | None = None
     done: list[dict] = field(default_factory=list)  # 서식·표·넣기 (글 바꾸기 아닌 수정)
+    proposed: list[dict] = field(default_factory=list)  # 미리 보기: 제안만 한 글 바꾸기 (패널이 고른 것만 적용)
 
 
 def _find_key(obj, key):
@@ -237,11 +238,17 @@ def strip_permission(reply: str) -> str:
     return reply.strip()
 
 
+PREVIEW_ASK = ("[미리 보기] 사용자가 고치기 전에 목록을 보고 고른다. apply_edits는 문서를 바꾸지 않고 제안으로만 남는다. "
+               "평소처럼 바꿀 것을 모두 apply_edits로 주고, 답변은 무엇을 제안했는지 짧게. 서식·표·넣기는 하지 않는다.")
+
+
 def compose_prompt(user_text: str, memory_rules: list[str], attached: str = "", scoped: bool = False,
-                   personal: bool = False) -> str:
-    if not memory_rules and not attached and not scoped and not personal:
+                   personal: bool = False, preview: bool = False) -> str:
+    if not memory_rules and not attached and not scoped and not personal and not preview:
         return user_text
     parts = [PERSONAL_OK] if personal else []
+    if preview:
+        parts.append(PREVIEW_ASK)
     if scoped:  # 그림 첨부 = 고칠 범위 (사용자 결정 2026-10-22). 도구 서버도 위치 없는 수정을 거부한다
         parts.append("[범위] 첨부한 그림에 보이는 부분만 고친다. 문서의 다른 곳은 같은 글이 있어도 바꾸지 않는다. 수정마다 그 부분의 줄 번호(lines)를 준다. "
                      "(그림을 문서에 넣어 달라는 요청이면 insert_content의 picture로 넣는다)")
@@ -285,7 +292,7 @@ def _stream(cmd: list[str], timeout: int, on_event) -> tuple[list[str], str, int
 
 def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = None,
              timeout: int = 600, on_progress=lambda pct, step: None, model: str | None = None,
-             images: list[str] = (), attached: str = "", personal: bool = False) -> TurnResult:
+             images: list[str] = (), attached: str = "", personal: bool = False, preview: bool = False) -> TurnResult:
     codex = find_codex()
     if not codex:
         return TurnResult("", [], [], None, {}, "missing")
@@ -297,7 +304,9 @@ def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = No
         flags["HWPGPT_ATTACHED"] = str(sess.with_suffix(".attached.txt"))
     if personal:  # 이번 요청만: 다음 요청의 도구 서버는 이 값 없이 다시 뜬다
         flags["HWPGPT_PERSONAL"] = "1"
-    cmd = build_command(codex, compose_prompt(user_text, memory_rules, attached, bool(images), personal), server_cmd,
+    if preview:
+        flags["HWPGPT_PREVIEW"] = "1"
+    cmd = build_command(codex, compose_prompt(user_text, memory_rules, attached, bool(images), personal, preview), server_cmd,
                         {**server_env, "HWPGPT_SESSION": str(sess), **flags}, thread_id, model, images)
     def on_event(e: dict) -> None:
         if pr := progress_of(e):
@@ -325,4 +334,5 @@ def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = No
         doc_type=doc_types[-1] if doc_types else None,  # 여러 번 기록하면 마지막 값
         usage=ev.usage, error=ev.error, thread_id=ev.thread_id or thread_id,
         done=[x["data"] for x in rows if x["kind"] == "done"],
+        proposed=[x["data"] for x in rows if x["kind"] == "proposed"],
     )

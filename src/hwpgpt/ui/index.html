@@ -85,6 +85,20 @@
   .updbar.show { display: block; }
   .updbar .bar { height: 6px; margin-top: 4px; border-radius: 3px; background: var(--line); overflow: hidden; }
   .updbar .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  /* 입력창 위 도구 줄: 자주 쓰는 요청 버튼 + 미리 보기·문서 검토·신구대조표 */
+  .tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 8px 10px 0; background: var(--panel);
+           border-top: 1px solid var(--line); font-size: 12px; }
+  .tools button { padding: 2px 8px; font-size: 12px; }
+  .tools label { display: flex; align-items: center; gap: 3px; color: var(--muted); cursor: pointer; }
+  .tools .sep { flex-basis: 100%; height: 0; }
+  .preset { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); max-width: 100%; }
+  .preset button { border: 0; background: transparent; border-radius: 12px; }
+  .preset .go { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 230px; }
+  .preset .x { color: var(--muted); padding: 2px 6px 2px 0; }
+  .proposed label { display: flex; gap: 8px; align-items: flex-start; padding: 6px 10px; border-left: 4px solid var(--accent); cursor: pointer; }
+  .proposed label + label { border-top: 1px solid var(--line); }
+  .proposed label small { display: block; color: var(--muted); }
+  .proposed .row { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); }
   footer { padding: 10px; background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 6px; }
   #attach { padding: 4px 8px; align-self: stretch; }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px; background: var(--panel); }
@@ -138,6 +152,14 @@
 
 <main id="log" aria-live="polite"></main>
 <div class="chips" id="chips"></div>
+<div class="tools" id="tools">
+  <span id="presets" style="display:contents"></span>
+  <button id="addPreset" title="입력창의 요청을 버튼으로 저장">＋ 저장</button>
+  <span class="sep"></span>
+  <label title="켜면 바로 고치지 않고, 바꿀 목록을 먼저 보여 줍니다. 고른 것만 적용 (글 바꾸기만)"><input type="checkbox" id="preview"> 고치기 전 미리 보기</label>
+  <button id="review" title="ChatGPT 없이 금액·합계·날짜 요일·연도 오타를 점검해 빨간 표시만 (사용량 없음)">문서 검토</button>
+  <button id="diffTable" title="이 문서에서 바꾼 글을 문서 끝에 '수정 전 | 수정 후' 표로 넣기 (↶로 뺄 수 있음)">신구대조표</button>
+</div>
 <div class="updbar" id="updbar" role="status" aria-live="polite"><span id="updtext"></span><div class="bar"><i id="updfill"></i></div></div>
 <footer>
   <button id="attach" title="파일 첨부: 그림·사진, 워드, 파워포인트, 한글(hwp·hwpx), 글 파일" aria-label="파일 첨부">📎</button>
@@ -233,6 +255,62 @@ function renderChanges(changes, checks, done = []) {
   $("log").append(box); scrollDown();
 }
 
+// 미리 보기: 바꿀 목록을 체크 상자로. 고른 것만 적용 → 결과는 평소 '바꾼 곳' 목록으로
+function renderProposed(list) {
+  if (!list.length) return;
+  const box = el("div", "changes proposed");
+  box.append(el("h4", null, `제안 ${list.length}개 — 적용할 것을 고르세요 (아직 문서는 그대로)`));
+  const boxes = list.map((p) => {
+    const lab = el("label"), cb = el("input"); cb.type = "checkbox"; cb.checked = true; cb.value = p.id;
+    const txt = el("span", null, `${p.find} → ${p.replace}`);
+    if (p.count > 1 || p.reason) txt.append(el("small", null, [p.count > 1 ? `${p.count}곳` : "", p.reason || ""].filter(Boolean).join(" · ")));
+    lab.append(cb, txt); box.append(lab);
+    return cb;
+  });
+  const row = el("div", "row"), ok = el("button", "primary", "선택 적용"), all = el("button", null, "모두 해제"), no = el("button", null, "적용 안 함");
+  all.onclick = () => { const on = !boxes.every((b) => b.checked); boxes.forEach((b) => (b.checked = on)); all.textContent = on ? "모두 해제" : "모두 선택"; };
+  no.onclick = () => box.replaceWith(el("div", "msg ai", "제안을 적용하지 않았습니다."));
+  ok.onclick = async () => {
+    if (busy) { say("err", "요청 처리가 끝난 뒤 눌러 주세요"); return; }
+    const ids = boxes.filter((b) => b.checked).map((b) => b.value);
+    if (!ids.length) { say("err", "적용할 항목을 골라 주세요"); return; }
+    ok.disabled = true;
+    const r = await api.apply_proposed(ids);
+    if (r.error) { ok.disabled = false; say("err", r.error); return; }
+    box.remove();
+    renderChanges(r.changes || [], r.checks || []);
+    refresh();
+  };
+  row.append(ok, all, no); box.append(row);
+  $("log").append(box); scrollDown();
+}
+
+// 자주 쓰는 요청 버튼: 누르면 입력창에 넣고(고쳐 보낼 수 있게) ×로 지우기, ＋ 저장으로 지금 입력을 더하기
+let presets = [];
+function renderPresets(list) {
+  if (JSON.stringify(list) === JSON.stringify(presets)) return;
+  presets = list || [];
+  $("presets").replaceChildren(...presets.map((s, i) => {
+    const w = el("span", "preset"), go = el("button", "go", s), x = el("button", "x", "×");
+    go.title = "입력창에 넣기: " + s;
+    x.title = "이 버튼 지우기"; x.setAttribute("aria-label", s + " 버튼 지우기");
+    go.onclick = () => { $("input").value = s; $("input").focus(); };
+    x.onclick = async () => { const next = presets.filter((_, j) => j !== i); renderPresets(next); await api.set_setting("presets", next); };
+    w.append(go, x); return w;
+  }));
+}
+
+async function runTool(btn, call, empty) {
+  if (busy) { say("err", "요청 처리가 끝난 뒤 눌러 주세요"); return; }
+  btn.disabled = true;
+  try {
+    const r = await call();
+    if (r.error) say("err", r.error);
+    else if (!(r.checks || []).length && !(r.done || []).length) say("ai", empty);
+    else renderChanges([], r.checks || [], r.done || []);
+  } finally { btn.disabled = false; refresh(); }
+}
+
 // 새 버전: 시작할 때 조용히 확인(있을 때만 알림), [업데이트] 버튼은 결과를 항상 알림
 async function checkUpdate(manual) {
   const btn = $("update");
@@ -322,6 +400,7 @@ function setOverlay(st) {
   for (const id of ["ovMissing", "ovLogin", "ovHwp"]) $(id).classList.toggle("show", id === which);
   $("log").style.display = which ? "none" : "";
   $("input").disabled = $("send").disabled = $("attach").disabled = !!which || busy;
+  $("tools").style.display = which ? "none" : "";
 }
 
 async function refresh() {
@@ -344,6 +423,8 @@ async function refresh() {
     const set = st.settings || {};
     if (set.theme) applyTheme(set.theme);
     renderModels(st.models || [], set.model);
+    renderPresets(set.presets || []);
+    if (document.activeElement !== $("preview")) $("preview").checked = !!set.preview;
     setOverlay(st);
   } catch (e) { /* 다음 주기에 다시 */ }
 }
@@ -431,6 +512,7 @@ async function send(again) {
     else if (r.error) say("err", r.error);
     if (r.reply) sayReply(r.reply);
     renderChanges(r.changes || [], r.checks || [], r.done || []);
+    renderProposed(r.proposed || []);
     for (const c of r.candidates || []) showCandidate(c.docType, c.rule);
     if (r.askPersonal) askPersonal(text, sending);
   } catch (e) { clearInterval(tick); wait.remove(); say("err", "오류: " + e); }
@@ -467,6 +549,14 @@ function wire() {
   $("restoreMarks").onclick = async () => { const n = await api.restore_marks(); say("ai", `형광펜 표시 ${n}곳을 다시 칠했습니다.`); refresh(); };
   $("theme").onclick = () => { const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; applyTheme(t); api.set_setting("theme", t); };
   $("model").onchange = (e) => api.set_setting("model", e.target.value);
+  $("preview").onchange = (e) => { lastStatus.settings = { ...(lastStatus.settings || {}), preview: e.target.checked }; api.set_setting("preview", e.target.checked); };
+  $("addPreset").onclick = async () => {
+    const s = $("input").value.trim();
+    if (!s) { say("err", "입력창에 저장할 요청을 먼저 적어 주세요"); return; }
+    if (!presets.includes(s)) { const next = [...presets, s]; renderPresets(next); await api.set_setting("presets", next); }
+  };
+  $("review").onclick = () => runTool($("review"), () => api.review(), "점검한 규칙(금액·합계·날짜 요일·연도 오타)에서 확인할 곳이 없습니다.");
+  $("diffTable").onclick = () => runTool($("diffTable"), () => api.change_table(), "");
   $("docType").onclick = async () => { const v = prompt("문서 종류", lastStatus.docType || ""); if (v != null) { await api.set_doc_type(v); refresh(); } };
   applyTheme(matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");  // 저장된 설정이 오기 전 기본
   $("update").onclick = () => checkUpdate(true);
@@ -479,7 +569,7 @@ window.addEventListener("pywebviewready", () => { api = window.pywebview.api; wi
 // 브라우저 미리보기용 (?mock): 실제 앱에서는 쓰이지 않음
 if (location.search.includes("mock")) {
   api = {
-    status: async () => ({ login: "ok", connected: true, target: "운영계획서.hwp", hasMarks: true, docType: "앵커사업 운영계획서", usage: { input_tokens: 32368 }, mode: "dock", settings: { theme: "dark" }, models: [{ slug: "gpt-a", name: "GPT-A" }, { slug: "gpt-b", name: "GPT-B" }], canRestore: false, limits: { five_hour_left: 94, weekly_left: 18, plan: "plus" } }),
+    status: async () => ({ login: "ok", connected: true, target: "운영계획서.hwp", hasMarks: true, docType: "앵커사업 운영계획서", usage: { input_tokens: 32368 }, mode: "dock", settings: { theme: "dark", presets: ["올해 학년도로 연도를 바꿔줘", "금액·합계·날짜 요일이 맞는지 확인만 해줘"] }, models: [{ slug: "gpt-a", name: "GPT-A" }, { slug: "gpt-b", name: "GPT-B" }], canRestore: false, limits: { five_hour_left: 94, weekly_left: 18, plan: "plus" } }),
     set_mode: async (m) => m, set_setting: async () => ({}), restore_marks: async () => 5,
     check_update: async () => ({ current: "1.0.1", latest: "1.0.2", available: true, notes: "- 표 금액 점검 개선\n- 업데이트 버튼" }),
     apply_update: async () => (await new Promise((ok) => setTimeout(ok, 2500)), { ok: true }),
@@ -487,10 +577,14 @@ if (location.search.includes("mock")) {
     send: async (t) => (await new Promise((ok) => setTimeout(ok, 3500)), { reply: "- 2026학년도 → 2027학년도\n- 기간을 2027. 10. 30.(토)로 변경\n예산 400만 원을 이렇게 배분할까요?\n[[선택: 네, 그렇게 배분해 주세요]]\n[[선택: 재료비를 더 늘려 주세요]]", docType: "앵커사업 운영계획서",
       changes: [{ find: "2026학년도", replace: "2027학년도", count: 3, id: "a1" }, { find: "2026. 10. 31.(토)", replace: "2027. 10. 30.(토)", count: 1, id: "a2" }],
       done: [{ label: "서식(bold=true): 추진 배경", at: "추진 배경", id: "d1" }, { label: "표 칸 채우기 B3: 12명", at: "12명" }],
-      checks: [{ text: "202699001", note: "보호 대상이라 바꾸지 않음: 식별번호" }, { text: "전년도 실적: 2025년", note: "전년도 실적 확인 필요" }, { text: "2026년", nth: 1, note: "옛 연도 2026가 남음 — 바꿔야 하는지 확인: 2026년 9월 1일" }] }),
+      checks: [{ text: "202699001", note: "보호 대상이라 바꾸지 않음: 식별번호" }, { text: "전년도 실적: 2025년", note: "전년도 실적 확인 필요" }, { text: "2026년", nth: 1, note: "옛 연도 2026가 남음 — 바꿔야 하는지 확인: 2026년 9월 1일" }],
+      proposed: [{ id: "p1", find: "10,000원×35명", replace: "12,000원×35명", count: 1, reason: "단가" }, { id: "p2", find: "350,000", replace: "420,000", count: 4 }] }),
     goto: async (t) => t !== "202699001",
     undo_item: async () => ({ restored: 1, skipped: 0 }), redo_item: async () => ({ restored: 1, skipped: 0 }), pick_files: async () => [{ path: "C:\\예시\\작년 계획서.hwp", name: "작년 계획서.hwp" }, { path: "C:\\예시\\행사 사진.jpg", name: "행사 사진.jpg" }], clear_marks: async () => 5, clear_all_marks: async () => ({ cleared: 7, memos: 2 }), new_conversation: async () => {}, login_start: async () => "ok",
     set_doc_type: async () => {}, memory_add: async () => {},
+    review: async () => ({ checks: [{ text: "2027. 10. 31.(토)", note: "날짜 확인 — 요일이 달력과 다름(실제 일)" }, { text: "20260", note: "연도 오타 의심: 20260 — 2026?" }] }),
+    change_table: async () => ({ done: [{ label: "신구대조표 2건 (문서 끝)", at: "변경 신구대조표", id: "t1" }] }),
+    apply_proposed: async (ids) => ({ changes: [{ find: "10,000", replace: "12,000", count: 2, id: "p9" }], checks: [] }),
   };
   window.addEventListener("DOMContentLoaded", () => { wire(); setTimeout(() => showCandidate("앵커사업 운영계획서", "축제은 10월 마지막 토요일"), 300); });
 }

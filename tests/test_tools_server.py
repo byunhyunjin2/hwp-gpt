@@ -324,3 +324,19 @@ def test_memo_text_names_the_target(tmp_path, fake_bridge):
     fake_bridge.text = "행사 일정은 10월이다"
     Tools(fake_bridge, tmp_path / "a.jsonl").insert_content([{"kind": "memo", "find": "행사 일정", "text": "다시 확인"}])
     assert fake_bridge.calls[0][1]["text"] == "[행사 일정] 다시 확인"
+
+
+def test_preview_only_proposes_and_refuses_shape_edits(fake_bridge, tmp_path):
+    """미리 보기: apply_edits는 문서를 바꾸지 않고 제안만 남김, 서식·표·넣기는 하지 않음."""
+    from hwpgpt import session
+
+    fake_bridge.text = "2026학년도 계획\r\n학번 202699001"
+    t = Tools(fake_bridge, tmp_path / "s.jsonl", preview=True)
+    out = t.apply_edits([{"find": "2026학년도", "replace": "2027학년도"}, {"find": "202699001", "replace": "202699002"}])
+    assert out["applied"] == [] and out["proposed"][0]["find"] == "2026학년도" and out["proposed"][0]["count"] == 1
+    assert fake_bridge.text.startswith("2026학년도") and not fake_bridge.applied  # 그대로
+    assert any("보호" in c["note"] for c in out["checks"])  # 규칙에 걸린 건 제안에도 안 들어감
+    assert [x["kind"] for x in session.read(tmp_path / "s.jsonl")].count("proposed") == 1
+    for r in (t.format_text([{"find": "계획", "bold": True}]), t.edit_table([{"action": "set_cell"}]),
+              t.insert_content([{"kind": "paragraph"}]), t.edit_table_rows([{"find": "계획"}])):
+        assert "미리 보기" in r["error"]
