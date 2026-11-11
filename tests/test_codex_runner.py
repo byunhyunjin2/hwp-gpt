@@ -83,7 +83,7 @@ def test_build_command_flags_and_resume():
     for flag in ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "--json",
                  'mcp_servers.hwpgpt.default_tools_approval_mode="approve"']:
         assert flag in s
-    assert cmd[-3:] == ["resume", "T1", "요청"]
+    assert cmd[-4:] == ["resume", "--", "T1", "요청"]
     # 토큰 절약: Codex 기본(코딩용) 지침 대신 우리 지침, 웹 검색 끔
     assert any(c.startswith("model_instructions_file=") and "AGENTS.md" in c for c in cmd)
     assert 'web_search="disabled"' in cmd
@@ -131,7 +131,7 @@ def test_list_models_and_model_flag(tmp_path):
     assert cr.list_models(tmp_path) == [{"slug": "gpt-a", "name": "GPT-A"}]
     assert cr.list_models(tmp_path / "없음") == []
     cmd = cr.build_command(Path("codex.exe"), "요청", ["py"], {}, "t1", model="gpt-a")
-    assert cmd[cmd.index("-m") + 1] == "gpt-a" and cmd[-3:] == ["resume", "t1", "요청"]
+    assert cmd[cmd.index("-m") + 1] == "gpt-a" and cmd[-4:] == ["resume", "--", "t1", "요청"]
     assert "-m" not in cr.build_command(Path("codex.exe"), "요청", ["py"], {})
 
 
@@ -141,9 +141,9 @@ def test_images_go_where_exec_and_resume_expect_them():
     from hwpgpt import codex_runner as cr
 
     new = cr.build_command(Path("codex.exe"), "요청", ["py"], {}, images=["a.png", "b.jpg"])
-    assert new[-3:] == ["--image=a.png", "--image=b.jpg", "요청"]
+    assert new[-4:] == ["--image=a.png", "--image=b.jpg", "--", "요청"]
     cont = cr.build_command(Path("codex.exe"), "요청", ["py"], {}, "t1", images=["a.png"])
-    assert cont[-4:] == ["resume", "--image=a.png", "t1", "요청"]
+    assert cont[-5:] == ["resume", "--image=a.png", "--", "t1", "요청"]
 
 
 def test_attached_text_is_marked_as_reference():
@@ -195,3 +195,14 @@ def test_run_turn_passes_attachments_and_returns_done(monkeypatch, tmp_path):
 
 def test_scoped_prompt_allows_inserting_the_attached_picture():
     assert "insert_content의 picture" in cr.compose_prompt("이 사진 넣어줘", [], scoped=True)
+
+
+def test_prompt_starting_with_dash_is_not_an_option():
+    """'- 첫째 줄…', '-m …' 요청이 Codex 옵션으로 읽히지 않게 '--' 뒤에 (2026-11-11 점검)."""
+    from pathlib import Path
+
+    from hwpgpt import codex_runner as cr
+
+    for tid in (None, "t1"):
+        cmd = cr.build_command(Path("codex.exe"), "-m 바꿔줘", ["py"], {}, tid)
+        assert cmd[-1] == "-m 바꿔줘" and "--" in cmd[cmd.index("--json"):] and "-m" not in cmd[:-1]

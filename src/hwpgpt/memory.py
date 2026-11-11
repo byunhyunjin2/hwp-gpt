@@ -42,7 +42,8 @@ class MemoryStore:
 
     def _save(self, doc_type: str, rules: list[str]) -> None:
         body = "".join(f"- {r}\n" for r in rules)
-        self._file(doc_type).write_text(f"# {doc_type.strip()}\n\n{body}", encoding="utf-8")
+        # 종류 이름은 AI가 정한다 → 줄바꿈이 있으면 "- …" 가짜 규칙 줄이 끼어들 수 있어 한 줄로 (2026-11-11 점검)
+        self._file(doc_type).write_text(f"# {' '.join(doc_type.split())}\n\n{body}", encoding="utf-8")
 
     def add(self, doc_type: str, rule: str) -> None:
         rs = self.rules(doc_type)

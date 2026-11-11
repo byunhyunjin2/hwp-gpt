@@ -57,10 +57,11 @@ def check(current: str = __version__, timeout: float = 5) -> dict:
     cleanup()
     try:  # ?t=: GitHub CDN이 'latest' 이동을 몇 분씩 캐시해 새 릴리스가 늦게 보이는 것 방지 (2026-10-22 확인)
         info = json.loads(_get(f"{LATEST}?t={int(time.time())}", timeout))
-    except Exception as e:  # 오프라인·차단·릴리스 없음: 패널은 그대로 쓰게
+        newer = parse(info["version"]) > parse(current)  # 버전 글이 이상해도 패널이 오류로 멈추지 않게
+    except Exception as e:  # 오프라인·차단·릴리스 없음·잘못된 latest.json: 패널은 그대로 쓰게
         return {"current": current, "available": False, "error": str(e)}
     return {"current": current, "latest": info["version"], "notes": info.get("notes", ""),
-            "available": parse(info["version"]) > parse(current), "_info": info}
+            "available": newer, "_info": info}
 
 
 def download(info: dict, on_progress: Callable[[int], None] = lambda pct: None) -> Path:

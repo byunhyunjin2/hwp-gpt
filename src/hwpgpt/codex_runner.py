@@ -117,7 +117,8 @@ def build_command(codex: Path, prompt: str, server_cmd: list[str], server_env: d
         cmd += ["-m", model]
     # 첨부 그림: 새 대화는 exec의, 이어지는 대화는 resume의 --image (값을 하나씩 붙여 다음 인자를 먹지 않게)
     img = [f"--image={p}" for p in images]
-    return cmd + (["resume", *img, thread_id, prompt] if thread_id else [*img, prompt])
+    # "--": 요청이 "- 첫째 줄…", "-m …"처럼 '-'로 시작해도 옵션으로 읽지 않게 (2026-11-11 점검: 실패하거나 모델 이름으로 먹힘)
+    return cmd + (["resume", *img, "--", thread_id, prompt] if thread_id else [*img, "--", prompt])
 
 
 @dataclass

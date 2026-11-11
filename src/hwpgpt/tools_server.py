@@ -122,8 +122,8 @@ class Tools:
         return c
 
     def _doc_type(self, name: str) -> None:
-        if name.strip():
-            session.write(self.s, "doc_type", {"name": name.strip()})
+        if name := " ".join(str(name).split())[:60]:  # 한 줄로 (기억 파일 제목·파일 이름이 됨)
+            session.write(self.s, "doc_type", {"name": name})
 
     @staticmethod
     def _numbered(doc: str) -> list[tuple[int, str]]:

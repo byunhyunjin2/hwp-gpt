@@ -58,3 +58,11 @@ def test_check_removes_leftover_setup_files(monkeypatch, tmp_path):
     monkeypatch.setattr(updater, "_get", lambda url, timeout: b'{"version": "1.0.1"}')
     updater.check("1.0.1")
     assert sorted(p.name for p in tmp_path.iterdir()) == ["다른파일.exe"]
+
+
+def test_check_bad_latest_json_is_not_an_error_for_the_panel(monkeypatch):
+    """latest.json의 버전 글이 이상하거나 없어도 예외 대신 '업데이트 없음' (2026-11-11 점검)."""
+    for body in (b'{"version": "1.0.x"}', b'{"notes": "-"}', b"[]"):
+        monkeypatch.setattr(updater, "_get", lambda url, timeout, b=body: b)
+        r = updater.check("1.0.1")
+        assert r["available"] is False and r["error"]
