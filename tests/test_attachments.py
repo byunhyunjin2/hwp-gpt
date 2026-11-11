@@ -45,6 +45,15 @@ def test_hwp_record_text_skips_controls():
     assert at.hwp_record_text(other + rec) == "연도\t끝"
 
 
+def test_hwp_record_text_joins_surrogate_pairs():
+    """한글 글머리 기호(U+F02B4)는 대리 쌍 두 칸 — 합쳐야 UTF-8로 쓸 수 있다. 짝 없는 반쪽은 � (2026-11-11 실제 공문)."""
+    units = [0xDB80, 0xDEB4, ord("가"), 0xDB80, 13]
+    body = struct.pack(f"<{len(units)}H", *units)
+    text = at.hwp_record_text(struct.pack("<I", 67 | (len(body) << 20)) + body)
+    assert text == "\U000F02B4가�"
+    text.encode("utf-8")
+
+
 def test_prepare_splits_images_docs_and_reports_problems(tmp_path):
     img = tmp_path / "사진.PNG"
     img.write_bytes(b"\x89PNG")

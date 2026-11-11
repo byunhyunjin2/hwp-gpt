@@ -87,8 +87,11 @@ def hwp_record_text(data: bytes) -> str:
                     if c == 9:
                         buf.append("\t")
                     k += 8
-            if "".join(buf).strip():
-                lines.append("".join(buf))
+            # 16비트씩 읽어 대리 쌍(U+10000 이상, 예: 한글 글머리 기호 U+F02B4)이 반쪽으로 남으면 UTF-8로 못 써서
+            # 요청이 오류로 멈춤 → 쌍을 합치고 짝 없는 반쪽은 �로 (2026-11-11 실제 공문으로 발견)
+            s = "".join(buf).encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+            if s.strip():
+                lines.append(s)
         i += size
     return "\n".join(lines)
 

@@ -143,5 +143,15 @@
 - **원인:** `MemoryStore._save`가 제목 줄에 종류 이름을 그대로 씀 (파일 이름만 정리)
 - **재발 방지:** 제목 줄과 도구 서버의 `doc_type`을 한 줄(공백 정리, 60자)로. 회귀 테스트 `test_doc_type_with_newline_cannot_inject_rules`
 
+## M-025 HWP 첨부의 대리 쌍 글자(한글 글머리 기호)가 반쪽으로 남아 요청이 오류로 멈춤 (2026-11-11 실제 공문 시험)
+- **증상:** 한글 글머리 기호(U+F02B4)가 든 .hwp를 첨부하면 첨부 글을 UTF-8 파일로 쓸 때 `UnicodeEncodeError: surrogates not allowed`
+- **원인:** `hwp_record_text`가 UTF-16 글자를 16비트씩 `chr()`로 바꿔 대리 쌍을 합치지 않음. 시험용 문서에는 이런 글자가 없었음
+- **재발 방지:** 문단 글을 UTF-16(surrogatepass)으로 다시 묶어 쌍을 합치고 짝 없는 반쪽은 �. 회귀 테스트 `test_hwp_record_text_joins_surrogate_pairs`. 시험 문서에 기호 글자도 넣을 것
+
+## M-026 빈칸 표시 'OOO'를 바꾸면 더 긴 'OOOOO학과장' 속까지 바뀜 (2026-11-11 실제 공문 시험)
+- **증상:** 결재선 '담당 OOO'를 홍길동으로 바꾸자 발신 명의 'OOOOO학과장'이 '홍길동OO학과장'이 됨
+- **원인:** 같은 글자 반복(빈칸 표시)은 더 긴 반복 속에도 들어 있는데, 위치 없는 수정(문서 전체의 같은 문구)을 허용함
+- **재발 방지:** `is_vague`가 같은 글자 반복(OOO·○○○·XXX)을 짧은 문구처럼 보고 줄 번호를 요구. 회귀 테스트 `test_repeated_placeholder_needs_lines`
+
 ## 주의 (실수 예방)
 - 실제 업무 문서(학생 이름·학번 포함)를 레포에 올리지 말 것 — `.gitignore`로 `*.hwp`, `*.hwpx` 차단

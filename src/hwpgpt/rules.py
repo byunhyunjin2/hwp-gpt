@@ -41,7 +41,8 @@ VAGUE_RE = re.compile(r"[\d.,%\s]{1,6}")  # "6", "4.0", "100%" 같은 짧은 숫
 def is_vague(find: str) -> bool:
     """위치 없이 바꾸면 문서 곳곳이 같이 바뀔 짧은 문구."""
     s = find.strip()
-    return len(s) <= 1 or bool(VAGUE_RE.fullmatch(s))
+    # "OOO", "○○○", "XXX" 같은 같은 글자 반복(빈칸 표시)은 더 긴 "OOOOO학과장" 속까지 바뀜 → 줄 번호 필요 (2026-11-11 실제 공문)
+    return len(s) <= 1 or bool(VAGUE_RE.fullmatch(s)) or len(set(s.replace(" ", ""))) == 1
 
 
 @dataclass

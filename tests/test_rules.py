@@ -193,3 +193,13 @@ def test_roster_table_name_cell_is_protected():
     assert ok == [] and "보호 대상" in checks[0].note
     ok, checks = validate_edits(doc, [Edit("홍길동", "김철수", "")], personal=True)
     assert len(ok) == 1 and checks == []
+
+
+def test_repeated_placeholder_needs_lines():
+    """빈칸 표시 'OOO'를 위치 없이 바꾸면 'OOOOO학과장' 속까지 바뀌어 '홍길동OO학과장'이 됨 (2026-11-11 실제 공문)."""
+    from hwpgpt.rules import is_vague
+
+    for s in ("OOO", "○○○", "XXX", "＊＊＊", "O O O"):
+        assert is_vague(s), s
+    for s in ("홍길동", "OO학과", "2026학년도"):
+        assert not is_vague(s), s
