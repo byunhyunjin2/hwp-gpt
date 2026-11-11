@@ -91,6 +91,12 @@ def test_clear_marks_keeps_user_markpen(bridge):
     assert _markpen_count_via_save(bridge) == 1
 
 
+def test_mark_check_nth_marks_only_target_occurrence(bridge):
+    """leftover_years가 준 nth번째 자리만 빨간 형광펜을 칠하고 학번 속 같은 숫자는 건드리지 않음 (2026-11-11)."""
+    assert bridge.mark_check("2026", nth=0)  # SAMPLE 앞쪽 '2026년'의 2026만, 뒤쪽 학번 '202699001'은 안 칠함
+    assert _markpen_count_via_save(bridge) == 1
+
+
 def test_goto_finds_text(bridge):
     assert bridge.goto("202699001") and not bridge.goto("없는 문장")
 
@@ -271,6 +277,7 @@ def test_table_read_set_cols_merge_create(bridge):
     assert "비고" not in bridge.read_text()
     assert bridge.table_op({"action": "merge", "find": "항목", "cell": "A3", "to": "B3"}) is None
     assert len(bridge.read_table("항목")["cells"]) == 5  # 마지막 줄 두 칸이 하나로
+    assert bridge.table_op({"action": "merge", "find": "항목", "cell": "A1"})  # to가 없으면 예외 대신 오류 문구
     assert bridge.table_op({"action": "set_cell", "find": "항목", "cell": "Z9", "text": "x"})  # 없는 칸은 이유
 
 

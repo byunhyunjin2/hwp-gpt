@@ -14,6 +14,7 @@ from .dock import Docker, EmbedDocker, find_hwp_window, place_right
 from .hwp_bridge import RED, HwpBridge, HwpNotAvailable
 from .memory import MemoryStore
 from .rules import AMOUNT_NOTES, PROTECTED_NOTE, amount_checks, changed_years, leftover_years, resolve_text, touches_amount
+from .tools_server import NO_MARK_NOTES
 
 TITLE = "HWP_GPT"
 LOGIN_TIMEOUT = 300  # 초 — 브라우저 로그인을 기다리는 시간
@@ -49,6 +50,7 @@ class Api:
         self._log: dict[str, dict] = {}  # 항목별 되돌리기: 번호 → 바꾼 기록(자리 포함)
         self._undone: list[str] = []      # 되돌린 수정 — 다음 요청에 AI에게 알림
         attachments.clear_pasted(paths.pasted_dir())
+        attachments.clear_pasted(paths.session_dir())
         self._limits = cr.read_rate_limits()
         self._progress = {"pct": 0, "step": "", "start": 0.0}
 
@@ -206,8 +208,8 @@ class Api:
         pairs = [(a["find"], a["replace"]) for a in applied if a.get("count")]
         try:
             left = leftover_years(self._bridge.read_text(), changed_years(pairs), [c["text"] for c in checks])
-            for t in dict.fromkeys(c["text"] for c in left):
-                self._bridge.mark_check(t)
+            for c in left:
+                self._bridge.mark_check(c["text"], c["nth"])
         except HwpNotAvailable:
             return []
         return [{"text": c["text"], "nth": c["nth"], "note": c["note"]} for c in left]
@@ -274,7 +276,7 @@ class Api:
             self._limits = cr.read_rate_limits(r.thread_id) or self._limits
             self._bridge.remember_marks([a["replace"] for a in r.applied if a.get("count")]
                                         + [m for d in r.done for m in d.get("marks", [])])
-            self._bridge.remember_marks([c["text"] for c in r.checks], RED)
+            self._bridge.remember_marks([c["text"] for c in r.checks if not c.get("note", "").startswith(NO_MARK_NOTES)], RED)
             for a in r.applied + [d for d in r.done if d.get("undo")]:  # 항목마다 [↶] 되돌리기용 번호
                 if a.get("count") or a.get("undo"):
                     a["id"] = uuid.uuid4().hex[:8]
@@ -320,6 +322,16 @@ class Api:
             self._busy.release()
         if done:
             rec["undone"] = undo
+            if hasattr(self._bridge, "_marks"):
+                marks = rec.get("marks") or ([rec["replace"]] if "replace" in rec else [])
+                if undo:
+                    active = {m for r in self._log.values() if not r.get("undone")
+                              for m in (r.get("marks") or ([r["replace"]] if "replace" in r else []))}
+                    for m in marks:
+                        if m not in active:
+                            self._bridge._marks.pop(m, None)
+                elif hasattr(self._bridge, "remember_marks"):
+                    self._bridge.remember_marks(marks)
             note = (f"{rec['label']} 되돌림" if "label" in rec
                     else f"{rec['find']} → {rec['replace']} 되돌림(원래 글로 돌아감)")
             if undo:

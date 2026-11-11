@@ -32,3 +32,12 @@ def test_duplicate_rule_not_added(tmp_path):
     m.add("공문", "a")
     m.add("공문", "a")
     assert m.rules("공문") == ["a"]
+
+
+def test_multiline_rule_and_unsafe_doc_type_and_bounds(tmp_path):
+    m = MemoryStore(tmp_path)
+    m.add("..", "첫째 줄\n둘째 줄")
+    assert m.rules("..") == ["첫째 줄 둘째 줄"]
+    m.update("..", 99, "무시됨")
+    m.delete("..", 99)
+    assert m.rules("..") == ["첫째 줄 둘째 줄"]

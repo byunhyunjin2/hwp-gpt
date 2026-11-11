@@ -65,8 +65,11 @@ def check(current: str = __version__, timeout: float = 5) -> dict:
 
 def download(info: dict, on_progress: Callable[[int], None] = lambda pct: None) -> Path:
     """설치 파일을 임시 폴더에 받고 SHA256을 latest.json 값과 대조한다. 다르면 지우고 예외."""
-    url = f"https://github.com/{REPO}/releases/download/v{info['version']}/{info['setup']}"
-    path = Path(tempfile.gettempdir()) / info["setup"]
+    setup = str(info.get("setup", ""))
+    if not setup or Path(setup).name != setup or not setup.endswith(".exe"):
+        raise ValueError(f"올바르지 않은 설치 파일 이름: {setup}")
+    url = f"https://github.com/{REPO}/releases/download/v{info['version']}/{setup}"
+    path = Path(tempfile.gettempdir()) / setup
     h = hashlib.sha256()
     req = urllib.request.Request(url, headers={"User-Agent": f"HWP_GPT/{__version__}"})
     with urllib.request.urlopen(req, timeout=30) as r, open(path, "wb") as f:

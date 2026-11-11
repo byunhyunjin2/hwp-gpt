@@ -14,6 +14,9 @@ $codexExe = Join-Path $CodexDir 'codex-x86_64-pc-windows-msvc.exe'
 $sig = Get-AuthenticodeSignature $codexExe
 if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'OpenAI') { throw "Codex 서명 확인 실패: $($sig.Status)" }
 
+& $Python -c "import mcp.server.fastmcp, webview, win32com, olefile"
+if ($LASTEXITCODE) { throw "필수 패키지(mcp·pywebview·pywin32·olefile)가 없는 Python입니다: $Python" }
+
 & $Python -m PyInstaller packaging\hwpgpt.spec --noconfirm --distpath dist --workpath build
 if ($LASTEXITCODE) { throw "PyInstaller 실패" }
 $out = Join-Path $root 'dist\HWP_GPT'

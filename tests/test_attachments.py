@@ -69,3 +69,15 @@ def test_pasted_screenshot_saved_as_file(tmp_path):
     assert "error" in at.save_pasted("data:text/plain;base64,aGk=", tmp_path, "1")
     at.clear_pasted(tmp_path)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_rejects_xml_entity_expansion_and_truncated_hwp_record(tmp_path):
+    import pytest
+
+    bomb = b'<!DOCTYPE lolz [<!ENTITY lol "lol">]><w:document><w:p><w:t>&lol;</w:t></w:p></w:document>'
+    p = _zip(tmp_path / "bomb.docx", {"word/document.xml": bomb})
+    with pytest.raises(ValueError):
+        at.extract_text(p)
+    # 0xFFF 확장 크기 헤더나 본문이 잘린 HWP 레코드도 예외 없이 멈춤
+    assert at.hwp_record_text(struct.pack("<I", 67 | (0xFFF << 20))) == ""
+    assert at.hwp_record_text(struct.pack("<II", 67 | (0xFFF << 20), 9999)) == ""

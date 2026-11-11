@@ -67,10 +67,13 @@ def login_status(codex: Path | None = None) -> Literal["ok", "logged_out", "miss
 
 def start_login(codex: Path | None = None) -> subprocess.Popen:
     """브라우저에서 ChatGPT 로그인을 연다. 끝나면 프로세스가 종료된다. 출력은 %APPDATA%\\HWP_GPT\\login.log"""
-    log = open(paths.app_dir() / "login.log", "w", encoding="utf-8")
-    return subprocess.Popen([str(codex or find_codex()), "login"], env=codex_env(),
-                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                            creationflags=NO_WINDOW)
+    exe = codex or find_codex()
+    if not exe:
+        raise FileNotFoundError("Codex 실행 파일이 없습니다")
+    with open(paths.app_dir() / "login.log", "w", encoding="utf-8") as log:
+        return subprocess.Popen([str(exe), "login"], env=codex_env(),
+                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                creationflags=NO_WINDOW)
 
 
 def tools_server_cmd() -> tuple[list[str], dict[str, str]]:
@@ -300,14 +303,19 @@ def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = No
             on_progress(*pr)
 
     on_progress(5, "ChatGPT에 요청 보내는 중")
-    out, err, code = _stream(cmd, timeout, on_event)
-    if code is None:
-        ev = Events(error="시간 초과")
-    else:
-        ev = parse_events(out)
-        if not ev.reply and not ev.error and code:
-            ev.error = _classify(err[-500:] or f"Codex 종료 코드 {code}")
-    rows = session.read(sess)
+    att_file = sess.with_suffix(".attached.txt")
+    try:
+        out, err, code = _stream(cmd, timeout, on_event)
+        if code is None:
+            ev = Events(error="시간 초과")
+        else:
+            ev = parse_events(out)
+            if not ev.reply and not ev.error and code:
+                ev.error = _classify(err[-500:] or f"Codex 종료 코드 {code}")
+        rows = session.read(sess)
+    finally:
+        sess.unlink(missing_ok=True)
+        att_file.unlink(missing_ok=True)
     doc_types = [x["data"]["name"] for x in rows if x["kind"] == "doc_type"]
     return TurnResult(
         reply=ev.reply,

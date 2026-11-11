@@ -13,6 +13,7 @@ from xml.etree import ElementTree
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 DOCS = {".docx", ".pptx", ".hwpx", ".hwp", ".txt", ".md", ".csv"}
 LIMIT = 15000
+MAX_RAW = 50 * 1024 * 1024  # 압축 해제 최대 크기 (압축 폭탄 방지)
 DIALOG_FILTER = ("첨부 파일 (*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.docx;*.pptx;*.hwpx;*.hwp;*.txt;*.md;*.csv)",
                  "모든 파일 (*.*)")
 
@@ -23,6 +24,8 @@ def _local(tag: str) -> str:
 
 def _paragraphs(xml: bytes) -> list[str]:
     """워드(w:p/w:t)·파워포인트(a:p/a:t)·한글(hp:p/hp:t) 모두 문단 p 안의 글 t. 표 속 문단은 따로 한 줄."""
+    if b"<!ENTITY" in xml.upper():
+        raise ValueError("지원하지 않는 XML 형식입니다")
     out: list[str] = []
 
     def walk(el, buf):
@@ -48,6 +51,9 @@ def _zip_text(path: Path, pattern: str) -> str:
     with zipfile.ZipFile(path) as z:
         names = [n for n in z.namelist() if re.fullmatch(pattern, n)]
         names.sort(key=lambda n: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", n)])
+        for n in names:
+            if z.getinfo(n).file_size > MAX_RAW:
+                raise ValueError("첨부 파일이 너무 큽니다")
         return "\n".join(line for n in names for line in _paragraphs(z.read(n)))
 
 
@@ -59,8 +65,12 @@ def hwp_record_text(data: bytes) -> str:
         tag, size = head & 0x3FF, (head >> 20) & 0xFFF
         i += 4
         if size == 0xFFF:
+            if i + 4 > len(data):
+                break
             size = struct.unpack_from("<I", data, i)[0]
             i += 4
+        if i + size > len(data):
+            break
         if tag == 67:
             chars = struct.unpack_from(f"<{size // 2}H", data, i)
             buf, k = [], 0
@@ -95,8 +105,13 @@ def _hwp_text(path: Path) -> str:
             raise ValueError("배포용(보기 전용) 한글 파일은 읽을 수 없습니다")
         out = []
         for s in sections:
-            raw = ole.openstream(s).read()
-            out.append(hwp_record_text(zlib.decompress(raw, -15) if flags & 0x1 else raw))
+            raw = ole.openstream(s).read(MAX_RAW)
+            if flags & 0x1:
+                d = zlib.decompressobj(-15)
+                raw = d.decompress(raw, MAX_RAW)
+                if d.unconsumed_tail:
+                    raise ValueError("첨부 파일이 너무 큽니다")
+            out.append(hwp_record_text(raw))
         return "\n".join(out)
 
 

@@ -93,7 +93,7 @@ class FakeBridge:
     def unmark(self, texts):
         self.unmarked = list(texts)
 
-    def mark_check(self, text: str) -> bool:
+    def mark_check(self, text: str, nth: int | None = None) -> bool:
         self.red.append(text)
         return text in self.text
 

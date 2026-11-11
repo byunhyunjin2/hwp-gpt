@@ -11,7 +11,8 @@ from pathlib import Path
 
 from . import paths
 
-_UNSAFE = re.compile(r'[\\/:*?"<>|]')
+_UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
 class MemoryStore:
@@ -20,7 +21,10 @@ class MemoryStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _file(self, doc_type: str) -> Path:
-        return self.root / (_UNSAFE.sub("_", doc_type.strip()) + ".md")
+        stem = _UNSAFE.sub("_", doc_type.strip()).strip(". ") or "기타"
+        if stem.upper() in _RESERVED:
+            stem = f"_{stem}"
+        return self.root / f"{stem}.md"
 
     def doc_types(self) -> list[str]:
         out = []
@@ -38,19 +42,23 @@ class MemoryStore:
 
     def _save(self, doc_type: str, rules: list[str]) -> None:
         body = "".join(f"- {r}\n" for r in rules)
-        self._file(doc_type).write_text(f"# {doc_type}\n\n{body}", encoding="utf-8")
+        self._file(doc_type).write_text(f"# {doc_type.strip()}\n\n{body}", encoding="utf-8")
 
     def add(self, doc_type: str, rule: str) -> None:
         rs = self.rules(doc_type)
-        if rule.strip() and rule.strip() not in rs:
-            self._save(doc_type, rs + [rule.strip()])
+        clean = " ".join(rule.split())
+        if clean and clean not in rs:
+            self._save(doc_type, rs + [clean])
 
     def update(self, doc_type: str, index: int, rule: str) -> None:
         rs = self.rules(doc_type)
-        rs[index] = rule.strip()
-        self._save(doc_type, rs)
+        clean = " ".join(rule.split())
+        if 0 <= index < len(rs) and clean:
+            rs[index] = clean
+            self._save(doc_type, rs)
 
     def delete(self, doc_type: str, index: int) -> None:
         rs = self.rules(doc_type)
-        del rs[index]
-        self._save(doc_type, rs)
+        if 0 <= index < len(rs):
+            del rs[index]
+            self._save(doc_type, rs)

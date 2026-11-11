@@ -301,10 +301,16 @@ class HwpBridge:
 
         self._call(do)
 
-    def mark_check(self, text: str) -> bool:
+    def mark_check(self, text: str, nth: int | None = None) -> bool:
         def do(h):
             for t in filter(None, (text, strip_unit(text))):  # 표 칸의 '원'이 떨어져 있으면 숫자만으로
-                if self._mark_all(h, t, RED, h.GetTextFile("UNICODE", "").count(t)):
+                if nth is not None:
+                    if self._seek(h, t, nth):
+                        self._markpen(h, RED)
+                        h.HAction.Run("Cancel")
+                        self._marks[t] = RED
+                        return True
+                elif self._mark_all(h, t, RED, h.GetTextFile("UNICODE", "").count(t)):
                     self._marks[t] = RED
                     return True
             return False
@@ -654,8 +660,11 @@ class HwpBridge:
             if a == "merge":
                 import re
 
-                (c1, r1), (c2, r2) = [re.fullmatch(r"([A-Z]+)(\d+)", x.upper()).groups()
-                                      for x in (op.get("cell", ""), op.get("to", ""))]
+                m1 = re.fullmatch(r"([A-Z]+)(\d+)", str(op.get("cell", "")).upper())
+                m2 = re.fullmatch(r"([A-Z]+)(\d+)", str(op.get("to", "")).upper())
+                if not m1 or not m2:
+                    return "cell과 to에 칸 주소(예: A1, B2)가 필요함"
+                (c1, r1), (c2, r2) = m1.groups(), m2.groups()
                 col = lambda s: sum((ord(ch) - 64) * 26 ** i for i, ch in enumerate(reversed(s)))  # noqa: E731
                 if col(c2) < col(c1) or int(r2) < int(r1):
                     return "to는 cell보다 오른쪽·아래여야 함"
@@ -748,7 +757,10 @@ class HwpBridge:
                 if not picture:
                     return "첨부한 그림 파일만 넣을 수 있음"
                 pics = self._pictures(h)
-                no = int(item.get("picture_no") or 0)
+                try:
+                    no = int(item.get("picture_no") or 0)
+                except (ValueError, TypeError):
+                    no = 0
                 if not 1 <= no <= len(pics):
                     return f"picture_no는 1~{len(pics)} (문서의 그림 {len(pics)}개, 문서 순서)"
                 old = pics[no - 1]
@@ -846,11 +858,15 @@ class HwpBridge:
             limit = pic.Properties.Item("Width")
         else:
             limit = self._text_width(h)
-        want = min(int(float(width_mm or 1e9) * MM), limit)
-        if in_cell or w > want:
+        try:
+            w_mm = float(str(width_mm).rstrip("mM ")) if width_mm is not None else 1e9
+        except (ValueError, TypeError):
+            w_mm = 1e9
+        want = min(max(1, int(w_mm * MM)), limit)
+        if (in_cell or w > want) and w > 0:
             ps = pic.Properties
             ps.SetItem("Width", want)
-            ps.SetItem("Height", int(hgt * want / w))
+            ps.SetItem("Height", max(1, int(hgt * want / w)))
             pic.Properties = ps
         return None
 

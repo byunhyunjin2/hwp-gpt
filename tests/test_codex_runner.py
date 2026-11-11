@@ -190,6 +190,7 @@ def test_run_turn_passes_attachments_and_returns_done(monkeypatch, tmp_path):
     assert "HWPGPT_FILES" in seen["env"] and "사진.png" in seen["env"] and "HWPGPT_ATTACHED" in seen["env"]
     assert seen["attached"].startswith("[첨부 파일: b.docx]")
     assert r.done[0]["at"] == "추진 배경"
+    assert list(tmp_path.iterdir()) == []  # 턴이 끝나면 세션·첨부 임시 파일 즉시 삭제 (2026-11-11)
 
 
 def test_scoped_prompt_allows_inserting_the_attached_picture():

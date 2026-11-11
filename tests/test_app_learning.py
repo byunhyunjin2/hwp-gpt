@@ -234,3 +234,18 @@ def test_panel_undo_redo_runs_recorded_ops_only_from_allowlist(fake_bridge):
     assert fake_bridge.calls[-1] == ("format", "제목", [0], {"Bold": 0}, {})
     assert api.redo_item("d1")["restored"] == 1 and api._undone == []  # 알리기 전에 다시 적용 → 알릴 것 없음
     assert api.undo_item("d2") == {"restored": 0, "skipped": 1}
+
+
+def test_undo_done_item_clears_remembered_marks_when_no_other_active(fake_bridge):
+    from hwpgpt import app as app_mod
+
+    api = app_mod.Api.__new__(app_mod.Api)
+    fake_bridge._marks = {"새 문단": (255, 240, 0)}
+    fake_bridge.remember_marks = lambda ms, rgb=(255, 240, 0): fake_bridge._marks.update({m: rgb for m in ms})
+    api._bridge, api._undone, api._busy = fake_bridge, [], __import__("threading").Lock()
+    api._log = {"d1": {"label": "새 문단", "marks": ["새 문단"],
+                       "undo": [{"op": "format_text", "args": ["제목", [0], {"Bold": 0}, {}]}],
+                       "redo": [{"op": "format_text", "args": ["제목", [0], {"Bold": 1}, {}]}]}}
+    fake_bridge.text = "제목"
+    assert api.undo_item("d1")["restored"] == 1 and fake_bridge._marks == {}
+    assert api.redo_item("d1")["restored"] == 1 and "새 문단" in fake_bridge._marks

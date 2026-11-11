@@ -174,3 +174,22 @@ def test_personal_keyword_only_as_label():
     # 낱말이 다른 말의 일부거나 문장 가운데 쓰이면 막지 않음 (2026-11-11 점검)
     for t in ("주소지 이전 안내", "전화위복의 계기", "사업 성명서 배포", "행사 연락처 확인 방법 안내 예정"):
         assert not _is_personal(t), t
+
+
+def test_table_sum_does_not_false_match_across_rows():
+    """1행 금액(20,000)과 2행 수량(1)·단가(20,000)가 20,000×1=20,000으로 겹쳐 합산되던 버그 (2026-11-11)."""
+    from hwpgpt.rules import check_table_sums
+
+    doc = "수량\r\n단가\r\n금액\r\n2\r\n10,000\r\n20,000\r\n1\r\n20,000\r\n20,000\r\n합계\r\n40,000원"
+    assert check_table_sums(doc) == []
+    doc_with_no = "연번\r\n수량\r\n단가\r\n금액\r\n1\r\n100\r\n100\r\n10,000\r\n2\r\n1\r\n10,000\r\n10,000\r\n합계\r\n20,000원"
+    assert check_table_sums(doc_with_no) == []
+
+
+def test_roster_table_name_cell_is_protected():
+    """표는 칸마다 한 줄이라 '홍길동' 줄에 '이름'이 없어도 앞뒤 학번·연락처와 머리글로 보호 (2026-11-11)."""
+    doc = "연번\r\n학과\r\n학번\r\n이름\r\n1\r\nOO학과\r\n202699001\r\n홍길동"
+    ok, checks = validate_edits(doc, [Edit("홍길동", "김철수", "")])
+    assert ok == [] and "보호 대상" in checks[0].note
+    ok, checks = validate_edits(doc, [Edit("홍길동", "김철수", "")], personal=True)
+    assert len(ok) == 1 and checks == []

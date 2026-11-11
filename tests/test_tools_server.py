@@ -133,6 +133,7 @@ def test_short_find_without_lines_is_refused(fake_bridge, tmp_path):
     fake_bridge.text = "참여시간 6시간\r\n6"
     out = Tools(fake_bridge, tmp_path / "s.jsonl").apply_edits([{"find": "6", "replace": "8"}])
     assert out["applied"] == [] and "줄 번호" in out["checks"][0]["note"] and fake_bridge.text == "참여시간 6시간\r\n6"
+    assert fake_bridge.red == []  # 짧은 문구 거부 때 문서 전체의 '6'을 빨갛게 칠하지 않음 (2026-11-11)
 
 
 def test_find_lines_around_shows_table_headers(fake_bridge, tmp_path):
@@ -190,7 +191,7 @@ def test_shapes_maps_words_to_hwp_values():
                          "line_spacing": 180})
     assert char["Bold"] == 1 and char["TextColor"] == (255, 0, 0) and char["Height"] == 1500
     assert char["FaceNameHangul"] == "맑은 고딕" and para == {"AlignType": 3, "LineSpacingType": 0, "LineSpacing": 180}
-    for bad in ({"color": "빨강"}, {"align": "middle"}, {"size": 999}, {}):
+    for bad in ({"color": "빨강"}, {"align": "middle"}, {"size": 999}, {"size": 0}, {"line_spacing": 0}, {}):
         with pytest.raises(ValueError):
             shapes(bad)
 
@@ -222,12 +223,14 @@ def test_edit_table_protects_personal_cell_and_column_delete(tmp_path, fake_brid
 
     fake_bridge.text = "이름\r\n연락처\r\n홍길동\r\n010-0000-0000"
     ops = [{"action": "set_cell", "find": "이름", "cell": "B2", "text": "010-1111-1111"},
+           {"action": "set_cell", "find": "이름", "cell": "A2", "text": "김철수"},
+           {"action": "merge", "find": "이름", "cell": "A2", "to": "B2"},
            {"action": "delete_col", "find": "이름", "cell": "B1"},
            {"action": "set_cell", "find": "이름", "cell": "A1", "text": "성명"}]
     out = Tools(fake_bridge, tmp_path / "a.jsonl").edit_table(ops)
-    assert [d["cell"] for d in out["done"]] == ["A1"] and len(out["checks"]) == 2
-    out = Tools(fake_bridge, tmp_path / "b.jsonl", personal=True).edit_table(ops[:2])
-    assert len(out["done"]) == 2
+    assert [d["cell"] for d in out["done"]] == ["A1"] and len(out["checks"]) == 4
+    out = Tools(fake_bridge, tmp_path / "b.jsonl", personal=True).edit_table(ops[:4])
+    assert len(out["done"]) == 4
 
 
 def test_insert_content_picture_only_attached_and_paragraph_delete_protected(tmp_path, fake_bridge):

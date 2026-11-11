@@ -21,6 +21,7 @@ _KEY = r"(?:담당자|성명|연락처|휴대\s*전화|전화(?:\s*번호)?|이�
 # 낱말이 '이름표'로 쓰인 때만 (2026-11-11 점검: '주소지 이전 안내'·'전화위복'까지 막았음)
 # — 'OO:' 꼴이거나, 줄 맨 앞(글머리 뒤)에 낱말 그대로(뒤에 한글이 붙지 않음)
 PERSONAL_LABEL_RE = re.compile(rf"{_KEY}\s*[:：]|^\s*(?:[-•·○●◦▪■□◆◇▶※*]\s*)?{_KEY}(?![가-힣])", re.M)
+PERSONAL_COL_RE = re.compile(rf"^\s*(?:{_KEY}|이름|학번|주민\s*(?:등록\s*)?번호)\s*$")
 AMOUNT_RE = re.compile(r"\d{1,3}(?:,\d{3})+")
 ID_RE = re.compile(r"\d{7,}")
 
@@ -115,8 +116,17 @@ def is_protected(text: str, context: str) -> str | None:
 
 
 def _paragraphs_with(doc_text: str, needle: str) -> list[str]:
-    paras = re.split(r"\r\n|\r|\n", doc_text)
-    hits = [p for p in paras if needle in p]
+    paras = [p for p in re.split(r"\r\n|\r|\n", doc_text) if p.strip()]
+    has_name_col = any( re.fullmatch(r"\s*(?:이름|성명)\s*", p) for p in paras)
+    hits = []
+    for idx, p in enumerate(paras):
+        if needle not in p:
+            continue
+        if has_name_col and not PERSONAL_COL_RE.match(p) and re.fullmatch(r"\s*[가-힣]{2,5}\s*", p):
+            near = " ".join(paras[max(0, idx - 2): min(len(paras), idx + 3)])
+            if PHONE_RE.search(near) or EMAIL_RE.search(near) or RRN_RE.search(near) or ID_RE.search(near):
+                p = f"성명: {p}"
+        hits.append(p)
     return hits or ([doc_text] if needle in doc_text else [])
 
 
@@ -254,8 +264,17 @@ def check_table_sums(doc_text: str) -> list[Check]:
                 header = True
                 break
         nums.reverse()
-        # 물품 목록(수량·단가·금액): 금액 칸 = 바로 앞 두 숫자의 곱인 칸
-        priced = sum(c for a, b, c in zip(nums, nums[1:], nums[2:]) if a * b == c and c >= 100)
+        # 물품 목록(수량·단가·금액): 금액 칸 = 바로 앞 두 숫자의 곱인 칸. 이미 묶인 3칸은 건너뛰어 행 경계(금액×1=단가) 오탐 방지
+        priced, k = 0, 0
+        while k + 2 < len(nums):
+            if k + 3 < len(nums) and nums[k] == 1 and nums[k + 1] * nums[k + 2] == nums[k + 3] > nums[k + 2]:
+                k += 1  # 연번 1 뒤에 (수량, 단가, 금액)이 오는 줄
+            a, b, c = nums[k], nums[k + 1], nums[k + 2]
+            if a * b == c and c >= 100:
+                priced += c
+                k += 3
+            else:
+                k += 1
         if header and len(cells) >= 2 and _num(total[1]) not in (sum(cells), priced):
             what = f"물품 금액(수량×단가)의 합 {priced:,}원" if priced else f"표 항목의 합 {sum(cells):,}원"
             out.append(Check(total[1], f"합계 {total[1]}원이 {what}과 다름"))

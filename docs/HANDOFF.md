@@ -3,8 +3,8 @@
 시작 전에 `AGENTS.md`, `docs/NOTES.md`, `docs/MISTAKES.md`, `CHANGELOG.md` 맨 위 몇 항목을 읽는다.
 
 ## 지금 상태
-- 공개 레포 `byunhyunjin2/hwp-gpt`, 로컬 `C:\Users\user\claudework\hwp-gpt`, 브랜치 `main`. 배포된 최신 v1.0.8
-- 2026-11-11: 워드 편집처럼 서식·표·넣기·검토 도구 7개 추가 + 점검 버그 수정 + 남은 한계 해결 (CHANGELOG). **아직 배포 안 함**
+- 공개 레포 `byunhyunjin2/hwp-gpt`, 브랜치 `main`. 배포된 최신 v1.0.9
+- 2026-11-11: 보안·코드·저장소 전체 점검 수정 (짧은 문구 거부 시 빨간 형광펜 오작동, 표 이름 칸 보호 우회, 물품 표 합계 행 경계 오탐, `done` 되돌리기 형광펜 상태, 세션·첨부 임시 파일 즉시 삭제, XML/압축 크기 제한 등) 완료
 - 공식 Codex `rust-v0.167.0`을 `spike\bin`(git 제외)에 준비·검증해 둠 → 빌드 때 `--codex spike\bin`
 - 예전 비공개 레포 폴더 `HWP_GPT`는 2026-10-26 정리로 지워짐. 개발 `.venv`는 이 레포 안(`python -m venv .venv` + requirements)
 - 테스트: `.venv\Scripts\python -m pytest -q`, 한글 필요 테스트 `-m hwp` (시험 전용 인스턴스, 한글을 모두 닫고)

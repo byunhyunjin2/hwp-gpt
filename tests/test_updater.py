@@ -47,6 +47,8 @@ def test_download_rejects_hash_mismatch(monkeypatch, tmp_path):
     with pytest.raises(ValueError):
         updater.download({**good, "sha256": "00"})
     assert not (tmp_path / "s.exe").exists()
+    with pytest.raises(ValueError):
+        updater.download({**good, "setup": "../evil.exe"})
 
 
 def test_check_removes_leftover_setup_files(monkeypatch, tmp_path):

@@ -13,12 +13,13 @@ import tempfile
 
 from . import session
 from .hwp_bridge import ALIGN, MM, HwpNotAvailable
-from .rules import (DATE_RE, Edit, amount_checks, changed_years, is_protected, is_vague, leftover_years, resolve_text,
-                    strip_unit, PROTECTED_NOTE, touches_amount, validate_edits)
+from .rules import (DATE_RE, Edit, PERSONAL_COL_RE, amount_checks, changed_years, is_protected, is_vague,
+                    leftover_years, resolve_text, strip_unit, PROTECTED_NOTE, touches_amount, validate_edits)
 
 NO_HWP = "한글 문서를 열어 주세요"
 MAX_LINES = 80
 PERMIT_NOTE = f"{PROTECTED_NOTE}: 사용자 허락이 필요함"
+NO_MARK_NOTES = ("문서에서 찾지 못함", "첨부한 그림 부분만", "짧은 문구라")
 TABLE_KO = {"set_cell": "칸 채우기", "insert_col_left": "왼쪽에 열 넣기", "insert_col_right": "오른쪽에 열 넣기",
             "delete_col": "열 지우기", "merge": "칸 합치기", "create": "새 표"}
 INSERT_KO = {"paragraph": "새 문단", "delete_paragraph": "문단 지우기", "page_break": "쪽 나누기", "picture": "그림 넣기",
@@ -37,22 +38,22 @@ def shapes(item: dict) -> tuple[dict, dict]:
         char["UnderlineType"] = 1 if item["underline"] else 0  # 1 = 글자 아래
     if "strike" in item:
         char["StrikeOutType"] = 1 if item["strike"] else 0
-    if c := item.get("color"):
+    if (c := item.get("color")) is not None and c != "":
         m = re.fullmatch(r"#?([0-9a-fA-F]{6})", str(c))
         if not m:
             raise ValueError(f"색은 #RRGGBB: {c}")
         char["TextColor"] = tuple(int(m[1][i:i + 2], 16) for i in (0, 2, 4))
-    if s := item.get("size"):
+    if (s := item.get("size")) is not None and s != "":
         if not 1 <= float(s) <= 200:
             raise ValueError(f"글자 크기는 1~200pt: {s}")
         char["Height"] = int(float(s) * 100)
-    if f := item.get("font"):
+    if (f := item.get("font")) is not None and str(f).strip():
         char.update(FaceNameHangul=str(f), FaceNameLatin=str(f), FontTypeHangul=1, FontTypeLatin=1)
-    if a := item.get("align"):
+    if (a := item.get("align")) is not None and a != "":
         if a not in ALIGN:
             raise ValueError(f"정렬은 {'/'.join(ALIGN)}: {a}")
         para["AlignType"] = ALIGN[a]
-    if ls := item.get("line_spacing"):
+    if (ls := item.get("line_spacing")) is not None and ls != "":
         if not 50 <= int(ls) <= 500:
             raise ValueError(f"줄 간격은 50~500%: {ls}")
         para.update(LineSpacingType=0, LineSpacing=int(ls))  # 0 = 글자에 따라(%)
@@ -114,7 +115,8 @@ class Tools:
 
     def _check(self, text: str, note: str) -> dict:
         text = resolve_text(text, self.b.read_text())  # 띄어쓰기가 달라도 문서의 실제 문구로 표시
-        self.b.mark_check(text)
+        if text and not note.startswith("문서에서 찾지 못함") and not (note.startswith(NO_MARK_NOTES) and len(text.strip()) <= 3):
+            self.b.mark_check(text)
         c = {"text": text, "note": note}
         session.write(self.s, "check", c)
         return c
@@ -139,6 +141,8 @@ class Tools:
 
     @_safe
     def find_lines(self, pattern: str, doc_type: str = "", around: int = 0) -> dict:
+        if len(pattern) > 200:
+            return {"error": "정규식이 너무 깁니다 (200자 이하)"}
         try:
             rx = re.compile(pattern)
         except re.error as e:
@@ -276,6 +280,16 @@ class Tools:
             rows.setdefault(re.sub(r"\D", "", addr), []).append(f"{addr}: {' '.join(text.split())}")
         return {"rows": [" | ".join(v) for v in rows.values()]}
 
+    def _cell_protected(self, find: str, nth: int, cell: str, old: str | None) -> str | None:
+        if not old or not old.strip() or PERSONAL_COL_RE.match(old):
+            return None
+        if reason := is_protected(old, old):
+            return reason
+        m = re.fullmatch(r"([A-Z]+)(\d+)", cell.upper())
+        if m and int(m[2]) >= 2 and PERSONAL_COL_RE.match(self.b.cell_text(find, nth, f"{m[1]}1") or ""):
+            return "개인정보가 있는 표 칸"
+        return None
+
     @_safe
     def edit_table(self, ops: list[dict]) -> dict:
         done, failed, checks = [], [], []
@@ -288,11 +302,15 @@ class Tools:
             if not why and a == "delete_col" and not self.personal:  # 표 줄 지우기처럼 내용이 사라짐 → 허락
                 checks.append(self._check(find, f"{PERMIT_NOTE} (표 열 지우기)"))
                 why = PERMIT_NOTE
-            old = self.b.cell_text(find, nth, op.get("cell", "")) if not why and a == "set_cell" else None
-            if not why and a == "set_cell" and not self.personal:
-                if old and (reason := is_protected(old, old)):
+            old = self.b.cell_text(find, nth, op.get("cell", "")) if not why and a in ("set_cell", "merge") else None
+            if not why and a in ("set_cell", "merge") and not self.personal:
+                if reason := self._cell_protected(find, nth, str(op.get("cell", "")), old):
                     checks.append(self._check(old, f"{PROTECTED_NOTE}: {reason}"))
                     why = PERMIT_NOTE
+                elif a == "merge" and (to_old := self.b.cell_text(find, nth, str(op.get("to", "")))):
+                    if reason := self._cell_protected(find, nth, str(op.get("to", "")), to_old):
+                        checks.append(self._check(to_old, f"{PROTECTED_NOTE}: {reason}"))
+                        why = PERMIT_NOTE
             why = why or self.b.table_op(op, nth)
             item = {"action": a, "cell": op.get("cell", ""), "find": find}
             if why:
