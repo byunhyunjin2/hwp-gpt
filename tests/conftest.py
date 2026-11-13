@@ -101,6 +101,10 @@ class FakeBridge:
         self.undo_spec = [{"op": "delete_para_at", "args": [0, 9, title]}]
         return None
 
+    def delete_titled_tables(self, prefix):
+        self._log("delete_titled_tables", prefix)
+        return 2
+
     def delete_para_at(self, lst, para, text):
         self._log("delete_para", text)
         return True

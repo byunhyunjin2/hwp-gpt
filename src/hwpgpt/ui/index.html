@@ -158,7 +158,8 @@
   <span class="sep"></span>
   <label title="켜면 바로 고치지 않고, 바꿀 목록을 먼저 보여 줍니다. 고른 것만 적용 (글 바꾸기만)"><input type="checkbox" id="preview"> 고치기 전 미리 보기</label>
   <button id="review" title="ChatGPT 없이 금액·합계·날짜 요일·연도 오타를 점검해 빨간 표시만 (사용량 없음)">문서 검토</button>
-  <button id="diffTable" title="이 문서에서 바꾼 글을 문서 끝에 '수정 전 | 수정 후' 표로 넣기 (↶로 뺄 수 있음)">신구대조표</button>
+  <button id="diffTable" title="이 문서에서 바꾼 글을 문서 끝 새 쪽에 '수정 전 | 수정 후' 표로 넣기 (↶로 뺄 수 있음)">신구대조표</button>
+  <button id="diffTableDel" title="문서에 넣은 신구대조표(제목과 표)를 모두 지우기 — 되돌리려면 한글 Ctrl+Z">대조표 지우기</button>
 </div>
 <div class="updbar" id="updbar" role="status" aria-live="polite"><span id="updtext"></span><div class="bar"><i id="updfill"></i></div></div>
 <footer>
@@ -263,6 +264,11 @@ function renderProposed(list) {
   const boxes = list.map((p) => {
     const lab = el("label"), cb = el("input"); cb.type = "checkbox"; cb.checked = true; cb.value = p.id;
     const txt = el("span", null, `${p.find} → ${p.replace}`);
+    // 글을 누르면 한글에서 바뀔 곳으로 (여러 곳이면 누를 때마다 다음 곳). 체크는 상자를 눌러서
+    const spots = p.nths || [...Array(p.count || 1).keys()];
+    let k = 0;
+    txt.title = "누르면 한글에서 바뀔 곳 보기" + (spots.length > 1 ? " (누를 때마다 다음 곳)" : "");
+    txt.onclick = (e) => { e.preventDefault(); gotoItem(txt, p.find, spots[k++ % spots.length]); };
     if (p.count > 1 || p.reason) txt.append(el("small", null, [p.count > 1 ? `${p.count}곳` : "", p.reason || ""].filter(Boolean).join(" · ")));
     lab.append(cb, txt); box.append(lab);
     return cb;
@@ -557,6 +563,13 @@ function wire() {
   };
   $("review").onclick = () => runTool($("review"), () => api.review(), "점검한 규칙(금액·합계·날짜 요일·연도 오타)에서 확인할 곳이 없습니다.");
   $("diffTable").onclick = () => runTool($("diffTable"), () => api.change_table(), "");
+  $("diffTableDel").onclick = async () => {
+    if (busy) { say("err", "요청 처리가 끝난 뒤 눌러 주세요"); return; }
+    if (!confirm("문서의 신구대조표(제목과 표)를 모두 지울까요?\n되돌리려면 한글에서 Ctrl+Z")) return;
+    const b = $("diffTableDel"); b.disabled = true;
+    try { const r = await api.delete_change_tables(); say(r.error ? "err" : "ai", r.error || `신구대조표 ${r.deleted}개를 지웠습니다.`); }
+    finally { b.disabled = false; refresh(); }
+  };
   $("docType").onclick = async () => { const v = prompt("문서 종류", lastStatus.docType || ""); if (v != null) { await api.set_doc_type(v); refresh(); } };
   applyTheme(matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");  // 저장된 설정이 오기 전 기본
   $("update").onclick = () => checkUpdate(true);
@@ -583,6 +596,7 @@ if (location.search.includes("mock")) {
     undo_item: async () => ({ restored: 1, skipped: 0 }), redo_item: async () => ({ restored: 1, skipped: 0 }), pick_files: async () => [{ path: "C:\\예시\\작년 계획서.hwp", name: "작년 계획서.hwp" }, { path: "C:\\예시\\행사 사진.jpg", name: "행사 사진.jpg" }], clear_marks: async () => 5, clear_all_marks: async () => ({ cleared: 7, memos: 2 }), new_conversation: async () => {}, login_start: async () => "ok",
     set_doc_type: async () => {}, memory_add: async () => {},
     review: async () => ({ checks: [{ text: "2027. 10. 31.(토)", note: "날짜 확인 — 요일이 달력과 다름(실제 일)" }, { text: "20260", note: "연도 오타 의심: 20260 — 2026?" }] }),
+    delete_change_tables: async () => ({ deleted: 1 }),
     change_table: async () => ({ done: [{ label: "신구대조표 2건 (문서 끝)", at: "변경 신구대조표", id: "t1" }] }),
     apply_proposed: async (ids) => ({ changes: [{ find: "10,000", replace: "12,000", count: 2, id: "p9" }], checks: [] }),
   };

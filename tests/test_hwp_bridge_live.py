@@ -490,3 +490,16 @@ def test_append_change_table_at_end_and_undo_redo(bridge):
     assert _run(bridge, undo)
     assert bridge.read_text().strip() == before.strip()
     assert bridge.append_table("변경 신구대조표 (시험)", rows) is None and "수정 후" in bridge.read_text()
+
+
+def test_change_table_starts_new_page_and_delete_removes_all(bridge):
+    """신구대조표는 새 쪽에서 시작, [대조표 지우기]는 여러 개를 제목과 함께 모두 지워 원래대로 (2026-11-13)."""
+    before = bridge.read_text()
+    pages = bridge._call(lambda h: h.PageCount)
+    rows = [["연번", "수정 전", "수정 후", "곳"], ["1", "2026년", "2027년", "1"]]
+    assert bridge.append_table("변경 신구대조표 (시험)", rows) is None
+    assert bridge._call(lambda h: h.PageCount) == pages + 1
+    assert bridge.append_table("변경 신구대조표 (시험2)", rows) is None
+    assert bridge.delete_titled_tables("변경 신구대조표") == 2
+    assert bridge.read_text().strip() == before.strip()
+    assert bridge._call(lambda h: h.PageCount) == pages

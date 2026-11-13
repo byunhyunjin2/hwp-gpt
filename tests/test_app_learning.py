@@ -304,3 +304,14 @@ def test_change_table_lists_active_text_edits_and_can_undo(tmp_path, fake_bridge
     assert a._log[d["id"]]["undo"] and a.undo_item(d["id"])["restored"] == 1
     a._log = {}
     assert "error" in a.change_table()
+
+
+def test_delete_change_tables_removes_all_and_retires_undo_rows(tmp_path, fake_bridge):
+    """[대조표 지우기]: 문서의 신구대조표를 모두 지우고, 목록의 ↶가 지운 표를 또 지우지 않게 (2026-11-13)."""
+    a = bare_api(tmp_path, fake_bridge)
+    a._undone = []
+    a._log = {"x": {"find": "2026", "replace": "2027", "count": 1, "pos": []}}
+    d = a.change_table()["done"][0]
+    assert a.delete_change_tables() == {"deleted": 2}
+    assert fake_bridge.calls[-1] == ("delete_titled_tables", "변경 신구대조표")
+    assert a._log[d["id"]]["undone"] and not a._log["x"].get("undone")

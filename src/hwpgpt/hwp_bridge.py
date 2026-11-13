@@ -642,7 +642,7 @@ class HwpBridge:
         def do(h):
             h.HAction.Run("Cancel")
             h.HAction.Run("MoveDocEnd")  # 본문 맨 끝 (표 칸 안이 아님)
-            h.HAction.Run("BreakPara")
+            h.HAction.Run("BreakPage")  # 새 쪽에서 시작 (BreakPara였을 땐 본문에 이어 붙었음, 2026-11-13 사용자 보고)
             spots = self._type_lines(h, title)
             why = self._make_table(h, rows)
             if why is None:
@@ -650,6 +650,26 @@ class HwpBridge:
             return why
 
         return self._call(do)
+
+    def delete_titled_tables(self, prefix: str) -> int:
+        """제목 문단(prefix로 시작) 바로 아래 표를 제목과 함께 지운다 (신구대조표 지우기). 지운 수."""
+
+        def spots(h):
+            out, c = [], h.HeadCtrl
+            while c:
+                if c.CtrlID == "tbl":
+                    lst, para, pos = self._anchor(c)
+                    title = self._para_text(h, lst, para - 1) if para > 0 else None
+                    if lst == 0 and title and title.startswith(prefix):
+                        out.append((lst, para, pos, title))
+                c = c.Next
+            return out
+
+        n = 0
+        for lst, para, pos, title in sorted(self._call(spots), reverse=True):  # 뒤에서부터 (앞 문단 번호가 안 밀리게)
+            if self.delete_ctrl_at("tbl", lst, para, pos, 2) and self.delete_para_at(lst, para - 1, title):
+                n += 1
+        return n
 
     def table_op(self, op: dict, nth: int = 0) -> str | None:
         """표 작업 하나. op = {"action", "find"(표 칸 글), "cell", "text", "to", "rows"}. 안 되면 이유.

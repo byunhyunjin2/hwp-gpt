@@ -26,6 +26,9 @@ UI = Path(__file__).resolve().parent / "ui" / "index.html"
 ICON = Path(__file__).resolve().parent / "assets" / "hwpgpt.ico"  # 창 제목줄 (개발판도 병아리)
 
 
+CHANGE_TABLE_TITLE = "변경 신구대조표"
+
+
 class Api:
     """화면(JS)에서 window.pywebview.api.* 로 부른다. 각 호출은 별도 스레드에서 실행된다."""
 
@@ -431,7 +434,7 @@ class Api:
         try:
             rows = [["연번", "수정 전", "수정 후", "곳"]] + [[str(i), r["find"], r["replace"], str(r["count"])]
                                                         for i, r in enumerate(recs, 1)]
-            title = "변경 신구대조표 (" + time.strftime("%Y. %m. %d.") + ")"
+            title = CHANGE_TABLE_TITLE + " (" + time.strftime("%Y. %m. %d.") + ")"
             why = self._bridge.append_table(title, rows)
             if why:
                 return {"error": why}
@@ -441,6 +444,24 @@ class Api:
             self._log[d["id"]] = d
             self._snapshot = self._bridge.read_text()
             return {"done": [d]}
+        except HwpNotAvailable:
+            return {"error": "한글 문서를 열어 주세요"}
+        finally:
+            self._busy.release()
+
+    def delete_change_tables(self) -> dict:
+        """[대조표 지우기]: 문서의 신구대조표(제목+표)를 모두 지운다 — 이전에 만든 것도. 한글 Ctrl+Z로 되돌림."""
+        if not self._busy.acquire(blocking=False):
+            return {"error": "요청 처리가 끝난 뒤 눌러 주세요"}
+        try:
+            n = self._bridge.delete_titled_tables(CHANGE_TABLE_TITLE)
+            if not n:
+                return {"error": "문서에 신구대조표가 없습니다"}
+            for r in self._log.values():  # 패널 목록의 ↶가 이미 지운 표를 또 지우지 않게
+                if any(x.get("op") == "append_table" for x in r.get("redo") or []):
+                    r["undone"] = True
+            self._snapshot = self._bridge.read_text()
+            return {"deleted": n}
         except HwpNotAvailable:
             return {"error": "한글 문서를 열어 주세요"}
         finally:
