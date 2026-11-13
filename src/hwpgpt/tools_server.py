@@ -501,7 +501,7 @@ def main() -> None:
         날짜는 요일 포함 전체 문자열. 연도를 바꾼 날짜는 자동으로 빨간 '확인 필요' 표시.
         금액은 숫자만(예: "1,234,560", '원' 빼고). 계산식·표 합계·사업 예산 점검은 자동 — 결과 checks를 보고 함께 고친다.
         규칙에 걸린 수정은 바뀌지 않고 결과 checks로 돌아온다.
-        결과 leftover = 아직 옛 연도가 남은 줄. 바꿔야 하면 다시 apply_edits, 아니면 checks로 표시."""
+        결과 leftover = 아직 옛 연도가 남은 줄(이력서 등 개인 이력은 빠져 있음). 행사·사업 연도면 다시 apply_edits, 지난 실적이면 checks."""
         return t.apply_edits(edits, checks)
 
     @mcp.tool()

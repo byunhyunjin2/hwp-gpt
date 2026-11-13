@@ -116,22 +116,61 @@ def is_protected(text: str, context: str) -> str | None:
     return None
 
 
-def _paragraphs_with(doc_text: str, needle: str) -> list[str]:
-    paras = [p for p in re.split(r"\r\n|\r|\n", doc_text) if p.strip()]
-    has_name_col = any( re.fullmatch(r"\s*(?:이름|성명)\s*", p) for p in paras)
-    hits = []
-    for idx, p in enumerate(paras):
-        if needle not in p:
-            continue
-        if has_name_col and not PERSONAL_COL_RE.match(p) and re.fullmatch(r"\s*[가-힣]{2,5}\s*", p):
-            near = " ".join(paras[max(0, idx - 2): min(len(paras), idx + 3)])
-            if PHONE_RE.search(near) or EMAIL_RE.search(near) or RRN_RE.search(near) or ID_RE.search(near):
-                p = f"성명: {p}"
-        hits.append(p)
-    return hits or ([doc_text] if needle in doc_text else [])
+def _lines(doc_text: str) -> list[tuple[int, int, str]]:
+    """빈 줄을 뺀 줄들 (시작, 끝, 글)."""
+    return [(m.start(), m.end(), m.group()) for m in re.finditer(r"[^\r\n]+", doc_text) if m.group().strip()]
+
+
+# 개인 이력 묶음: 이력서·경력·학력 같은 제목 줄부터 서명 줄까지는 연도 갱신 등에서 절대 바꾸지 않는다 (2026-11-13:
+# 결과보고서의 강사 이력서 학력·경력·자격 날짜가 '옛 연도 남음'으로 표시돼 바뀔 수 있었음)
+HISTORY_START_RE = re.compile(r"(?:이력서|이력카드|경력증명서|재직증명서|자기소개서|강사카드|강사프로필|강사이력|개인이력|경력사항|학력사항)")
+HISTORY_END_RE = re.compile(r"\(\s*서\s*명\s*\)|\(\s*인\s*\)|서명\s*$")
+HISTORY_MAX_LINES = 150
+
+
+def history_zones(doc_text: str) -> list[tuple[int, int]]:
+    """개인 이력 묶음의 (시작, 끝) 글자 위치. 제목 줄(공백 무시 전체가 이력서 등)에서 서명 줄까지, 없으면 150줄까지."""
+    ls, zones, i = _lines(doc_text), [], 0
+    while i < len(ls):
+        if HISTORY_START_RE.fullmatch(re.sub(r"\s", "", ls[i][2])):
+            j = i
+            while j + 1 < len(ls) and j - i < HISTORY_MAX_LINES and not HISTORY_END_RE.search(ls[j][2]):
+                if j > i and HISTORY_START_RE.fullmatch(re.sub(r"\s", "", ls[j + 1][2])):
+                    break  # 다음 이력서가 바로 시작
+                j += 1
+            zones.append((ls[i][0], ls[j][1]))
+            i = j + 1
+        else:
+            i += 1
+    return zones
+
+
+def _in_zone(pos: int, zones: list[tuple[int, int]]) -> bool:
+    return any(a <= pos < b for a, b in zones)
+
+
+def _occurrence_contexts(doc_text: str, needle: str) -> list[tuple[int, str]]:
+    """needle이 나오는 곳마다 (위치, 그 줄). 표 이름 칸(이름·성명 열이 있는 표에서 번호 옆 짧은 한글)은 '성명: '을 붙여 개인정보로."""
+    ls = _lines(doc_text)
+    has_name_col = any(re.fullmatch(r"\s*(?:이름|성\s*명)\s*", t) for _, _, t in ls)
+    out, pos = [], doc_text.find(needle)
+    while pos >= 0:
+        idx = next((k for k, (a, b, _) in enumerate(ls) if a <= pos < b), None)
+        if idx is None or pos + len(needle) > ls[idx][1]:  # 여러 줄에 걸친 글: 걸친 줄을 모두 문맥으로
+            p = doc_text[doc_text.rfind("\n", 0, pos) + 1: doc_text.find("\n", pos + len(needle)) % (len(doc_text) + 1)]
+        else:
+            p = ls[idx][2]
+            if has_name_col and not PERSONAL_COL_RE.match(p) and re.fullmatch(r"\s*[가-힣]{2,5}\s*", p):
+                near = " ".join(t for _, _, t in ls[max(0, idx - 2): idx + 3])
+                if PHONE_RE.search(near) or EMAIL_RE.search(near) or RRN_RE.search(near) or ID_RE.search(near):
+                    p = f"성명: {p}"
+        out.append((pos, p))
+        pos = doc_text.find(needle, pos + len(needle))  # str.count·한글 찾기와 같은 겹치지 않는 순서
+    return out
 
 
 PROTECTED_NOTE = "보호 대상이라 바꾸지 않음"
+HISTORY_NOTE = "개인 이력(이력서·학력·경력·자격)"
 
 
 def validate_edits(doc_text: str, edits: list[Edit], need_lines: bool = False,
@@ -150,14 +189,25 @@ def validate_edits(doc_text: str, edits: list[Edit], need_lines: bool = False,
         if e.nths is None and is_vague(e.find):
             checks.append(Check(e.find, "짧은 문구라 문서 곳곳이 같이 바뀔 수 있어 바꾸지 않음 — 바꿀 줄 번호(lines)를 함께 주세요"))
             continue
-        reason = None if personal else next(
-            (r for p in (e.context or _paragraphs_with(doc_text, e.find))
-             if (r := is_protected(e.find, p))),
-            None,
-        )
-        if reason:
-            checks.append(Check(e.find, f"{PROTECTED_NOTE}: {reason}"))
-            continue
+        if not personal:
+            # 나오는 곳마다 따로 검사: 보호할 곳만 빼고 나머지는 바로 바꾼다 (한 곳 때문에 전부 '확인 필요'로 돌리던 문제, 2026-11-13)
+            occ = _occurrence_contexts(doc_text, e.find)
+            zones = history_zones(doc_text)
+            want = range(len(occ)) if e.nths is None else [k for k in e.nths if k < len(occ)]
+            bad = {}
+            for k in want:
+                pos, para = occ[k]
+                if r := (HISTORY_NOTE if _in_zone(pos, zones) else is_protected(e.find, para)):
+                    bad[k] = r
+            if bad:
+                keep = tuple(k for k in want if k not in bad)
+                reason = next(iter(bad.values()))
+                if not keep:
+                    checks.append(Check(e.find, f"{PROTECTED_NOTE}: {reason}"))
+                    continue
+                if any(r != "식별번호(학번 등) 숫자" for r in bad.values()):  # 학번 속 숫자는 당연히 그대로 — 알릴 것 없음
+                    checks.append(Check(e.find, f"{PROTECTED_NOTE}: {reason} — 그 {len(bad)}곳만 그대로 두고 나머지 {len(keep)}곳은 바꿈"))
+                e = Edit(e.find, e.replace, e.reason, keep, e.context)
         bad = _weekday_problems(e.replace)
         if bad:
             checks.append(Check(e.find, "요일 확인 필요 — " + "; ".join(bad)))
@@ -197,11 +247,11 @@ def changed_years(pairs: list[tuple[str, str]]) -> set[str]:
 def leftover_years(doc_text: str, old_years: set[str], skip: list[str] = ()) -> list[dict]:
     """연도 갱신 후 문서에 남은 옛 연도. 식별번호 안의 숫자와, 이미 확인 표시한 문구(skip)가 든 줄은 뺀다.
     text = 연도가 붙은 낱말(띄어쓰기 없는 덩어리, 한글 찾기용), nth = 문서에서 그 낱말의 몇 번째(0부터)."""
-    out = []
+    out, zones = [], history_zones(doc_text)
     for y in sorted(old_years):
         for m in re.finditer(rf"(?<!\d){y}(?!\d)", doc_text):
-            if _inside_number(doc_text, m.start(), m.end()):
-                continue
+            if _inside_number(doc_text, m.start(), m.end()) or _in_zone(m.start(), zones):
+                continue  # 이력서의 학력·경력 날짜는 지난 사실 — '남음'으로 알려 바꾸게 하지 않음
             token = re.match(r"\S+", doc_text[m.start():])[0][:20]
             line = " ".join(doc_text[doc_text.rfind("\n", 0, m.start()) + 1:].split("\n", 1)[0].split())
             if any(" ".join(t.split()) in line for t in skip if t.strip()):

@@ -217,3 +217,38 @@ def test_review_document_finds_without_changing():
     assert got["20260"].startswith("연도 오타")
     assert any("420,000" in n for n in got.values())
     assert "2026. 10. 31.(토)" not in got and not any("202699001" in t for t in got)
+
+
+RESUME_DOC = ("2025학년도 결과보고서\r\n◦ 일시: 2025. 10. 25.(토)\r\n2025 북구 페스티벌 인건비 청구서\r\n"
+              "이 력 서\r\n성    명\r\n박민수\r\n학력\r\n2017.03. ~ 2020.08.\r\nOO대학교\r\n경력\r\n2025.09.09.\r\n상담사 1급\r\n"
+              "2025 북구 페스티벌 부스 운영\r\n위의 기재한 사항은 사실과 틀림이 없음.\r\n2025년  10 월  15 일\r\n성명 : 박민수 (서명)\r\n"
+              "붙임 2025 북구 페스티벌 사진")
+
+
+def test_history_block_never_changes_but_rest_changes_right_away():
+    """이력서(제목~서명) 속 연도는 그대로, 같은 문구의 본문 쪽은 바로 바꿈 — 한 곳 때문에 전부 '확인 필요'가 되지 않게 (2026-11-13)."""
+    from hwpgpt.rules import history_zones
+
+    z = history_zones(RESUME_DOC)
+    assert len(z) == 1 and RESUME_DOC[z[0][0]:z[0][1]].startswith("이 력 서") and RESUME_DOC[z[0][0]:z[0][1]].endswith("(서명)")
+    ok, checks = validate_edits(RESUME_DOC, [Edit("2025 북구 페스티벌", "2026 북구 페스티벌", "연도")])
+    assert len(ok) == 1 and ok[0].nths == (0, 2)  # 본문 청구서 제목·붙임은 바로 바꾸고 이력서 경력 줄만 그대로
+    assert "개인 이력" in checks[0].note and "나머지 2곳은 바꿈" in checks[0].note
+    ok, checks = validate_edits(RESUME_DOC, [Edit("2025.09.09.", "2026.09.09.", "연도")])
+    assert ok == [] and "개인 이력" in checks[0].note
+    ok, checks = validate_edits(RESUME_DOC, [Edit("2025학년도", "2026학년도", "연도")])
+    assert len(ok) == 1 and ok[0].nths is None and checks == []  # 보호할 곳이 없으면 그대로 전부
+
+
+def test_year_in_id_number_left_quietly_rest_changed():
+    """'2026'이 학번 속에도 있으면 학번만 그대로 두고 나머지는 바꿈 (알림 없음)."""
+    ok, checks = validate_edits("2026학년도\r\n학번 202699001\r\n2026년 행사", [Edit("2026", "2027", "연도", nths=(0, 1, 2))])
+    assert ok[0].nths == (0, 2) and checks == []
+
+
+def test_leftover_years_skip_history_block():
+    from hwpgpt.rules import leftover_years
+
+    left = leftover_years(RESUME_DOC.replace("2025학년도", "2026학년도"), {"2025"})
+    assert all("2025.09.09." not in c["line"] and "10 월" not in c["line"] for c in left)
+    assert any("북구 페스티벌" in c["line"] for c in left)
