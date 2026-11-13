@@ -503,3 +503,22 @@ def test_change_table_starts_new_page_and_delete_removes_all(bridge):
     assert bridge.delete_titled_tables("변경 신구대조표") == 2
     assert bridge.read_text().strip() == before.strip()
     assert bridge._call(lambda h: h.PageCount) == pages
+
+
+def test_same_text_in_header_does_not_skip_or_cancel_body_edits(bridge):
+    """머리말에도 같은 글이 있으면: 전부 바꾸기는 본문 마지막 것을 빠뜨렸고, 번째(nths) 수정은 통째로 되돌려졌음 (2026-11-13)."""
+    bridge._call(lambda h: (h.HAction.Run("MoveDocEnd"), bridge._insert(h, "\r\n가 2025학년도\r\n나 2025학년도\r\n다 2025학년도")))
+    assert bridge.insert({"kind": "header", "text": "2025학년도 사업단"}) is None
+    res = bridge.apply([Edit("2025학년도", "2026학년도", "연도", (0, 2))])
+    assert res[0][1] == 2
+    assert bridge.read_text().endswith("가 2026학년도\r\n나 2025학년도\r\n다 2026학년도")
+    bridge.apply([Edit("2025학년도", "2026학년도", "연도")])
+    assert "2025학년도" not in bridge.read_text()
+
+
+def test_replace_containing_find_changes_each_spot_once(bridge):
+    """한글 찾기는 문서 끝에서 처음으로 돌아감 — '2026년'→'2026년도'처럼 바꾼 글에 find가 들어 있어도 한 번씩만 (2026-11-13)."""
+    res = bridge.apply([Edit("2026년", "2026년도", "표기")])
+    assert res[0][1] == 1 and bridge.read_text().startswith("2026년도 행사,")
+    res = bridge.apply([Edit("2026년", "2026년도", "표기", (0,))])
+    assert res[0][1] == 1 and bridge.read_text().startswith("2026년도도 행사,")

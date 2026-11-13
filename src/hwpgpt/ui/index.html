@@ -159,7 +159,7 @@
   <label title="켜면 바로 고치지 않고, 바꿀 목록을 먼저 보여 줍니다. 고른 것만 적용 (글 바꾸기만)"><input type="checkbox" id="preview"> 고치기 전 미리 보기</label>
   <button id="review" title="ChatGPT 없이 금액·합계·날짜 요일·연도 오타를 점검해 빨간 표시만 (사용량 없음)">문서 검토</button>
   <button id="diffTable" title="이 문서에서 바꾼 글을 문서 끝 새 쪽에 '수정 전 | 수정 후' 표로 넣기 (↶로 뺄 수 있음)">신구대조표</button>
-  <button id="diffTableDel" title="문서에 넣은 신구대조표(제목과 표)를 모두 지우기 — 되돌리려면 한글 Ctrl+Z">대조표 지우기</button>
+  <button id="diffTableDel" title="문서에 넣은 신구대조표(제목과 표)를 모두 지우기 — 되돌리려면 한글에서 Ctrl+Z (표 하나에 4번)">대조표 지우기</button>
 </div>
 <div class="updbar" id="updbar" role="status" aria-live="polite"><span id="updtext"></span><div class="bar"><i id="updfill"></i></div></div>
 <footer>
@@ -565,9 +565,9 @@ function wire() {
   $("diffTable").onclick = () => runTool($("diffTable"), () => api.change_table(), "");
   $("diffTableDel").onclick = async () => {
     if (busy) { say("err", "요청 처리가 끝난 뒤 눌러 주세요"); return; }
-    if (!confirm("문서의 신구대조표(제목과 표)를 모두 지울까요?\n되돌리려면 한글에서 Ctrl+Z")) return;
+    if (!confirm("문서의 신구대조표(제목과 표)를 모두 지울까요?\n되돌리려면 한글에서 Ctrl+Z를 누르세요 (표 하나에 4번)")) return;
     const b = $("diffTableDel"); b.disabled = true;
-    try { const r = await api.delete_change_tables(); say(r.error ? "err" : "ai", r.error || `신구대조표 ${r.deleted}개를 지웠습니다.`); }
+    try { const r = await api.delete_change_tables(); say(r.error ? "err" : "ai", r.error || `신구대조표 ${r.deleted}개를 지웠습니다. 되돌리려면 한글에서 Ctrl+Z ${r.deleted * 4}번.`); }
     finally { b.disabled = false; refresh(); }
   };
   $("docType").onclick = async () => { const v = prompt("문서 종류", lastStatus.docType || ""); if (v != null) { await api.set_doc_type(v); refresh(); } };

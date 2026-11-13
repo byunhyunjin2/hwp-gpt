@@ -19,3 +19,21 @@ def test_bmp_to_png_bottom_up_bgr():
     idat = png[png.index(b"IDAT") + 4: png.index(b"IEND") - 8]
     raw = zlib.decompress(idat)
     assert raw == b"\0" + bytes([255, 0, 0, 255, 255, 255]) + b"\0" + bytes([0, 0, 255, 0, 255, 0])
+
+
+def test_changed_spot_finds_which_body_spot_changed():
+    from hwpgpt.hwp_bridge import _changed_spot
+
+    before = "가 2025학년도 나 2025학년도"
+    left = [[2, 0], [12, 1]]
+    assert _changed_spot(before, "가 2026학년도 나 2025학년도", "2025학년도", "2026학년도", left) == 0
+    assert _changed_spot(before, "가 2025학년도 나 2026학년도", "2025학년도", "2026학년도", left) == 1
+    assert _changed_spot(before, before, "2025학년도", "2026학년도", left) is None  # 머리말 등 본문 밖
+
+
+def test_wrapped_when_find_comes_back_in_same_list():
+    from hwpgpt.hwp_bridge import _wrapped
+
+    last = {0: (3, 10), 7: (0, 2)}
+    assert _wrapped(last, (0, 0, 5)) and _wrapped(last, (0, 3, 10)) and _wrapped(last, (7, 0, 1))
+    assert not _wrapped(last, (0, 3, 11)) and not _wrapped(last, (9, 0, 0))

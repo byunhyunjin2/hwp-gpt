@@ -252,3 +252,15 @@ def test_leftover_years_skip_history_block():
     left = leftover_years(RESUME_DOC.replace("2025학년도", "2026학년도"), {"2025"})
     assert all("2025.09.09." not in c["line"] and "10 월" not in c["line"] for c in left)
     assert any("북구 페스티벌" in c["line"] for c in left)
+
+
+def test_history_zone_only_from_document_title_not_column_header():
+    """'경력사항'은 계획서 강사 표의 열 이름에도 쓰임 → 그 아래 행사 일시까지 보호돼 바꾸지 못했음. '강사 이력서'는 인식 (2026-11-13)."""
+    from hwpgpt.rules import history_zones
+
+    plan = "2025학년도 운영계획\n강사 현황\n성명\n경력사항\n홍길동\n일시: 2025. 11. 1.(토)\n작성자 (인)\n"
+    assert history_zones(plan) == []
+    ok, _ = validate_edits(plan, [Edit("2025. 11. 1.(토)", "2026. 10. 31.(토)", "")])
+    assert len(ok) == 1
+    doc = "결과보고서\n강사 이력서\n학력 2025. 2. 졸업\n(서명)\n끝"
+    assert [doc[a:b] for a, b in history_zones(doc)] == ["강사 이력서\n학력 2025. 2. 졸업\n(서명)"]

@@ -109,6 +109,8 @@ def build_command(codex: Path, prompt: str, server_cmd: list[str], server_env: d
         "-c", f"mcp_servers.hwpgpt.command={_toml(server_cmd[0])}",
         "-c", f"mcp_servers.hwpgpt.args={_toml(server_cmd[1:])}",
         "-c", 'mcp_servers.hwpgpt.default_tools_approval_mode="approve"',
+        # 도구 시간 제한 (Codex 기본 60초). 수십 곳을 바꾸면 문단 정리까지 1분이 넘을 수 있음 (2026-11-13 점검)
+        "-c", "mcp_servers.hwpgpt.tool_timeout_sec=300",
         "-c", f"mcp_servers.hwpgpt.env={env_toml}",
     ]
     for f in DISABLED_FEATURES:

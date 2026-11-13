@@ -3,6 +3,7 @@
 연결은 ROT의 `!HwpObject*` 항목으로만 한다 — GetActiveObject는 사용자가 연 한글도 못 찾고,
 Dispatch는 숨은 새 한글을 띄운다 (docs/spike-results.md, MISTAKES M-003).
 """
+import re
 from typing import Callable
 
 from .com_worker import ComWorker
@@ -23,6 +24,22 @@ UNDO_BY_CTRL = {"picture": "gso", "memo": "%%me", "footnote": "fn", "header": "h
 
 class HwpNotAvailable(Exception):
     """한글이 없거나 연결이 끊김."""
+
+
+def _wrapped(last: dict, at: tuple) -> bool:
+    """한글 찾기가 문서 끝에서 처음으로 돌아왔는지: 같은 목록(본문·표 칸·머리말)에서 이미 지나간 자리 이하면."""
+    return at[0] in last and tuple(at[1:]) <= tuple(last[at[0]])
+
+
+def _changed_spot(before: str, after: str, find: str, replace: str, left: list) -> int | None:
+    """한 자리를 바꾼 뒤 본문 글(after)이 left의 몇 번째 find 자리가 바뀐 것인지. 본문이 그대로면(머리말 등) None."""
+    if after == before:
+        return None
+    d = next((i for i, (a, b) in enumerate(zip(before, after)) if a != b), min(len(before), len(after)))
+    for j, (s, _) in enumerate(left):
+        if s <= d <= s + len(find) and before[:s] + replace + before[s + len(find):] == after:
+            return j
+    return None
 
 
 def _replace_nths(text: str, find: str, replace: str, nths: set[int]) -> str:
@@ -81,7 +98,7 @@ class HwpBridge:
         self.table_width_before = 0  # 마지막 열 작업 전 표 폭 (열 넣기 되돌릴 때 원래 폭으로)
 
     # --- 내부 ---
-    def _call(self, fn):
+    def _call(self, fn, timeout: float = 30):
         import pywintypes
 
         def guarded():
@@ -93,7 +110,7 @@ class HwpBridge:
                 self._h = None
                 raise HwpNotAvailable(f"한글 연결이 끊어짐: {e}") from e
 
-        return self._w.call(guarded)
+        return self._w.call(guarded, timeout)
 
     @staticmethod
     def _find(h, text: str, from_start: bool) -> bool:
@@ -103,7 +120,7 @@ class HwpBridge:
         p = h.HParameterSet.HFindReplace
         h.HAction.GetDefault("RepeatFind", p.HSet)
         p.FindString, p.FindRegExp, p.IgnoreMessage, p.Direction = text, 0, 1, 0
-        p.FindType = 1  # 끝에서 처음으로 돌아가지 않음
+        p.FindType = 1  # 끝에서 처음으로 돌아가지 않음 — 이라고 했지만 실제로는 돌아감 (2026-11-13 시험). 부르는 쪽에서 막는다
         return bool(h.HAction.Execute("RepeatFind", p.HSet))
 
     @staticmethod
@@ -133,13 +150,20 @@ class HwpBridge:
     def _tidy(self, h, paras) -> None:
         """고친 문단을 주위에 맞춘다: 같은 글머리 종류의 가장 가까운 이웃(앞뒤 3문단, 같은 표 칸 안)과
         정렬·여백·들여쓰기를 같게 하고, 한글 줄 나눔을 어절 단위로(단어가 줄 끝에서 갈라지지 않게)."""
+        memo = {}  # 문단 글 읽기가 느림(문단마다 이웃 6개) — 붙어 있는 고친 문단끼리 이웃을 다시 읽지 않게 (2026-11-13 점검)
+
+        def read(lst, para):
+            if (lst, para) not in memo:
+                memo[lst, para] = self._para_text(h, lst, para)
+            return memo[lst, para]
+
         for lst, para in sorted(paras):
-            text = self._para_text(h, lst, para)
+            text = read(lst, para)
             if text is None:
                 continue
             near = []
             for d in (1, -1, 2, -2, 3, -3):  # 가까운 순, 앞 문단 먼저
-                t = self._para_text(h, lst, para - d) if para - d >= 0 else None
+                t = read(lst, para - d) if para - d >= 0 else None
                 if t is not None:
                     near.append((para - d, t))
             src = same_kind_neighbor(text, near)
@@ -156,6 +180,16 @@ class HwpBridge:
                 setattr(p, k, v)
             p.BreakNonLatinWord = 0  # 0 = 어절, 1 = 글자(한글 기본값) — 2026-10-25 시험으로 확인
             h.HAction.Execute("ParagraphShape", p.HSet)
+
+    def _count_hits(self, h, text: str, cap: int) -> int:
+        """한글 찾기로 text가 몇 번 찾아지는지 (머리말·글상자 속 포함). 문서는 바꾸지 않음."""
+        n, last, found = 0, {}, self._find(h, text, from_start=True)
+        while found and n < cap and not _wrapped(last, at := tuple(h.GetPos())):
+            last[at[0]] = at[1:]
+            n += 1
+            h.HAction.Run("Cancel")
+            found = self._find(h, text, from_start=False)
+        return n
 
     def _mark_all(self, h, text: str, rgb, limit: int) -> int:
         n = 0
@@ -198,27 +232,52 @@ class HwpBridge:
         def do(h):
             out = []
             for e in edits:
-                before = h.GetTextFile("UNICODE", "")
-                limit = before.count(e.find)
+                before = body = h.GetTextFile("UNICODE", "")
                 want = None if e.nths is None else set(e.nths)
-                k, pos = 0, []
+                # 본문에 남은 find 자리 [지금 시작 위치, 원래 번호]. 한글 찾기는 머리말·글상자 속도 찾아 찾은 순서 ≠ 본문 순서
+                # → 바꿀 때마다 본문 글이 어디가 바뀌었는지로 몇 번째인지 안다 (머리말에 같은 글이 있으면 본문 마지막 것을
+                # 빠뜨리거나 nths 수정을 통째로 되돌렸음, 2026-11-13 점검)
+                left = [[m.start(), k] for k, m in enumerate(re.finditer(re.escape(e.find), before))]
+                # 찾은 수가 본문 자리 수와 같으면 순서도 같다고 보고 번호로 고름(빠름). 다르면(머리말 등에도 있음) 자리마다
+                # 바꿔 보고 본문 몇 번째가 바뀌었는지 확인 — 자리마다 본문을 읽어 느리니 그때만
+                verify = want is not None and self._count_hits(h, e.find, len(left) + 50) != len(left)
+                pos, k, last = [], -1, {}
                 found = self._find(h, e.find, from_start=True)
-                while found and k < limit:
-                    if want is None or k in want:
-                        self._insert(h, e.replace)  # 선택 영역을 바꿈
-                        end = h.GetPos()  # 바꾼 글 뒤 — 다음 찾기는 여기부터 (바꾼 글 속의 find를 다시 찾지 않게)
-                        for _ in range(len(e.replace)):
-                            h.HAction.Run("MoveSelLeft")
+                for _ in range(len(left) + 50):
+                    # 한글 찾기는 FindType=1이어도 문서 끝에서 처음으로 돌아감 → 이미 찾았던 자리면 끝
+                    # (바꾼 글에 find가 들어 있으면 '2026'→'2026년년…'처럼 계속 바뀔 수 있음, 2026-11-13 점검)
+                    if not found or _wrapped(last, at := tuple(h.GetPos())):
+                        break
+                    last[at[0]] = at[1:]
+                    k += 1
+                    if want is not None and not verify and k not in want:
+                        h.HAction.Run("Cancel")
+                        found = self._find(h, e.find, from_start=False)
+                        continue
+                    self._insert(h, e.replace)  # 선택 영역을 바꿈
+                    end = h.GetPos()  # 바꾼 글 뒤 — 다음 찾기는 여기부터 (바꾼 글 속의 find를 다시 찾지 않게)
+                    last[end[0]] = tuple(end[1:])  # 바꾼 글 속 find를 돌아와 다시 찾으면 끝으로 보게
+                    for _ in range(len(e.replace)):
+                        h.HAction.Run("MoveSelLeft")
+                    j = None
+                    if verify:
+                        now = h.GetTextFile("UNICODE", "")
+                        j = _changed_spot(body, now, e.find, e.replace, left)
+                    if not verify or (j is not None and left[j][1] in want):
                         pos.append(list(h.GetPos()))  # 바꾼 글자의 시작 자리
                         self._markpen(h, YELLOW)
                         h.HAction.Run("Cancel")
                         h.SetPos(*end)
-                    else:
-                        h.HAction.Run("Cancel")
-                    k += 1
+                        if j is not None:
+                            left.pop(j)
+                            for x in left[j:]:
+                                x[0] += len(e.replace) - len(e.find)
+                            body = now
+                    else:  # 고르지 않은 자리(또는 본문 밖) → 원래 글로
+                        self._insert(h, e.find)
                     found = self._find(h, e.find, from_start=False)
                 if want is not None and pos and h.GetTextFile("UNICODE", "") != _replace_nths(before, e.find, e.replace, want):
-                    # 한글 찾기 순서가 본문 글 순서와 달라(글상자·머리말 등) 다른 자리를 바꿈 → 되돌리고 바꾸지 않음
+                    # 그래도 다른 자리가 바뀌었으면 되돌리고 바꾸지 않음 (안전장치)
                     self._revert(h, [{"find": e.find, "replace": e.replace, "pos": pos}])
                     pos = []
                 if pos:
@@ -227,7 +286,7 @@ class HwpBridge:
             self._tidy(h, {(lst, para) for _, _, ps in out for lst, para, _ in ps})
             return out
 
-        return self._call(do)
+        return self._call(do, timeout=240)  # 수십 곳이면 30초가 넘음 — 도중에 끊기면 반쯤 바뀐 채 오류로 보임
 
     def undo(self, applied: list[dict]) -> tuple[int, int]:
         """apply가 바꾼 자리를 거꾸로(마지막 것부터) 원래 글로 되돌린다. 그사이 사용자가 고친 자리는 건너뛴다.
