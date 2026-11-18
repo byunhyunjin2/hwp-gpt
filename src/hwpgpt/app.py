@@ -104,9 +104,23 @@ class Api:
         threading.Timer(0.5, self._window.destroy).start()  # 설치 프로그램이 파일을 바꿀 수 있게 패널 종료
         return {"ok": True}
 
+    def _is_save_as(self) -> bool:
+        """수정한 문서를 '다른 이름으로 저장'해 경로만 바뀐 경우인지 (수정됨→저장됨이고 본문이 직전과 이어짐)."""
+        if not self._prev_modified or self._snapshot is None:
+            return False
+        try:
+            if self._bridge.is_modified():
+                return False
+            now = self._bridge.read_text()
+        except HwpNotAvailable:
+            return False
+        import difflib
+
+        return bool(now) and difflib.SequenceMatcher(None, self._snapshot, now).quick_ratio() >= 0.5
+
     def _sync_target(self, target: str) -> None:
-        """다른 문서로 바뀌면 이전 문서의 대화·종류·비교 기준·표시 목록을 버린다."""
-        if self._target is not None and target != self._target:
+        """다른 문서로 바뀌면 이전 문서의 대화·종류·비교 기준·표시 목록을 버린다. '다른 이름으로 저장'은 유지."""
+        if self._target is not None and target != self._target and not self._is_save_as():
             self._thread_id = self._doc_type = self._snapshot = self._prev_modified = None
             self._candidates = []
             self._bridge._marks.clear()  # 이전 문서의 형광펜은 그 문서에 그대로 둠
@@ -184,6 +198,7 @@ class Api:
             "candidates": self._pop_candidates(),
             "mode": self._mode, "limits": self._limits, "version": __version__,
             "settings": {"presets": DEFAULT_PRESETS, **self._settings}, "models": self._models,
+            "docTypes": self._memory.doc_types(), "rules": self.memory_list(),
         }
 
     def login_start(self) -> str:
@@ -215,6 +230,26 @@ class Api:
         """작업 중 진행률 (COM을 부르지 않아 빠르다). 화면이 1초마다 부른다."""
         p = self._progress
         return {"pct": p["pct"], "step": p["step"], "sec": int(time.time() - p["start"]) if p["start"] else 0}
+
+    def cancel(self) -> bool:
+        """진행 중인 ChatGPT 요청을 중단한다."""
+        return cr.cancel_turn()
+
+    def copy_text(self, text: str) -> bool:
+        """패널의 글(AI 답변·변경·비교 내용)을 Windows 클립보드에 복사한다."""
+        import win32clipboard
+        import win32con
+
+        try:
+            win32clipboard.OpenClipboard(None)
+        except Exception:
+            return False
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, str(text))
+            return True
+        finally:
+            win32clipboard.CloseClipboard()
 
     def _leftover_checks(self, applied: list[dict], checks: list[dict]) -> list[dict]:
         """요청이 끝난 뒤 코드가 한 번 더: 바뀐 옛 연도가 문서에 남았으면 빨간 표시 + 확인 목록."""
@@ -519,13 +554,15 @@ class Api:
         if t:
             self._memory.add(t, rule)
 
-    def memory_update(self, index: int, rule: str) -> None:
-        if self._doc_type:
-            self._memory.update(self._doc_type, index, rule)
+    def memory_update(self, index: int, rule: str, doc_type: str | None = None) -> None:
+        t = doc_type or self._doc_type
+        if t:
+            self._memory.update(t, index, rule)
 
-    def memory_delete(self, index: int) -> None:
-        if self._doc_type:
-            self._memory.delete(self._doc_type, index)
+    def memory_delete(self, index: int, doc_type: str | None = None) -> None:
+        t = doc_type or self._doc_type
+        if t:
+            self._memory.delete(t, index)
 
 
 def _load_settings() -> dict:
@@ -608,7 +645,7 @@ def main() -> None:
     api = Api()
     stop = threading.Event()
     api._window = webview.create_window(TITLE, url=str(UI), js_api=api, width=380, height=900,
-                                       min_size=(320, 400), hidden=True)  # _dock_loop가 오른쪽에 둔 뒤 보여 줌
+                                       min_size=(320, 400), hidden=True, text_select=True)  # _dock_loop가 오른쪽에 둔 뒤 보여 줌
     api._window.events.loaded += lambda: _wire_drop(api._window)
     t = threading.Thread(target=_dock_loop, args=(api, stop), daemon=True)
     t.start()

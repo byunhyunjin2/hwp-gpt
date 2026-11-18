@@ -128,6 +128,7 @@
 - 실제 `AppData`에도 로그인 완료 (2026-10-22 11:21, `spike/login_diag.py`로 확인)
 
 ## pywebview
+- `create_window`는 기본이 `text_select=False`라 `body { user-select: none }`을 주입함 → 반드시 `text_select=True`를 넘기고 버튼·라벨 안 글자도 `user-select: text`로 풀어야 드래그 복사가 됨. 항목 클릭(`goto`) 시 `window.getSelection()`이 있으면 한글 창으로 포커스를 넘기지 않아야 `Ctrl+C`가 먹힘 (2026-11-18)
 - `js_api` 객체의 **공개 속성은 전부 JS로 노출하려고 재귀 탐색**함 → 창·COM 객체를 공개 속성으로 두면 재귀 깊이 초과·UI 스레드 오류. 내부 상태는 반드시 `_` 접두사
 - **패널 창을 다른 스레드에서 건드릴 때 `win32gui.SetWindowLong` 금지** — 대상 창 스레드 응답을 기다리는 동안 GIL을 쥐어 화면 스레드와 교착 (2026-10-22 시험). `SetWindowPos`·`MoveWindow`·`ShowWindow`·`SetParent`는 GIL을 풂. 스타일 변경은 `dock.set_window_long`(ctypes)
 - 실기 테스트(`-m hwp`)의 'Windows fatal exception 0x800706be'는 한글 종료 뒤 `CoUninitialize`가 COM 연결을 풀며 COM 안에서 처리되는 RPC 실패를 pytest faulthandler가 찍은 것 (2026-11-11 확인, 테스트 정리 동안만 끔)

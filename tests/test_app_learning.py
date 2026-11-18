@@ -315,3 +315,41 @@ def test_delete_change_tables_removes_all_and_retires_undo_rows(tmp_path, fake_b
     assert a.delete_change_tables() == {"deleted": 2}
     assert fake_bridge.calls[-1] == ("delete_titled_tables", "변경 신구대조표")
     assert a._log[d["id"]]["undone"] and not a._log["x"].get("undone")
+
+
+def test_save_as_keeps_marks_undo_and_triggers_learning(tmp_path, monkeypatch):
+    """'다른 이름으로 저장'으로 경로가 바뀌어도 형광펜·되돌리기·대화를 잃지 않고 직접 수정 학습이 돈다 (2026-11-18)."""
+    doc = Doc("2027학년도 운영계획서\r\n교육 기간: 2027. 11. 6.(토)")
+    doc._marks = {"2027학년도": (255, 240, 0)}
+    a = bare_api(tmp_path, doc)
+    a._target = r"C:\문서\2026_계획서.hwp"
+    a._thread_id, a._doc_type, a._snapshot = "T1", "앵커사업 운영계획서", doc.text
+    a._log, a._proposed = {"u1": {"find": "2026학년도", "replace": "2027학년도"}}, {}
+    doc.modified = True
+    a._watch_save()
+    # 사용자가 일부를 직접 고치고 '다른 이름으로 저장' → 경로가 바뀌고 modified=False가 됨
+    doc.text = "2027학년도 운영계획서\r\n교육 기간: 2027. 10. 30.(토)"
+    doc.modified = False
+    learned = []
+    monkeypatch.setattr(Api, "_learn_now", lambda self: learned.append(1))
+    a._sync_target(r"C:\문서\2027_계획서.hwp")
+    a._watch_save()
+    for t in threading.enumerate():
+        if t is not threading.current_thread() and t.daemon:
+            t.join(1)
+    assert a._target == r"C:\문서\2027_계획서.hwp"
+    assert a._thread_id == "T1" and "2027학년도" in doc._marks and "u1" in a._log
+    assert learned == [1]
+
+
+def test_copy_text_writes_to_windows_clipboard():
+    import win32clipboard
+    import win32con
+
+    api = Api.__new__(Api)
+    assert api.copy_text("변경 확인 테스트 문구")
+    win32clipboard.OpenClipboard(None)
+    try:
+        assert win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT) == "변경 확인 테스트 문구"
+    finally:
+        win32clipboard.CloseClipboard()

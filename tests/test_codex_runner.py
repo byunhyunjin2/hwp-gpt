@@ -206,3 +206,25 @@ def test_prompt_starting_with_dash_is_not_an_option():
     for tid in (None, "t1"):
         cmd = cr.build_command(Path("codex.exe"), "-m 바꿔줘", ["py"], {}, tid)
         assert cmd[-1] == "-m 바꿔줘" and "--" in cmd[cmd.index("--json"):] and "-m" not in cmd[:-1]
+
+
+def test_cancel_turn_stops_running_stream(tmp_path, monkeypatch):
+    import sys
+    import threading
+    import time
+
+    monkeypatch.setattr(cr, "_prepare_work_dir", lambda: tmp_path)
+    out = {}
+
+    def run():
+        out["res"] = cr._stream([sys.executable, "-c", "import time; time.sleep(30)"], 30, lambda e: None)
+
+    t = threading.Thread(target=run)
+    t.start()
+    for _ in range(30):
+        if cr._active_proc is not None:
+            break
+        time.sleep(0.05)
+    assert cr.cancel_turn() is True
+    t.join(5)
+    assert cr._cancelled is True and out["res"][2] != 0

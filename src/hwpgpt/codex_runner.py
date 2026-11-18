@@ -268,13 +268,31 @@ def _prepare_work_dir() -> Path:
     return w
 
 
+_active_proc: subprocess.Popen | None = None
+_cancelled = False
+
+
+def cancel_turn() -> bool:
+    """실행 중인 Codex 요청을 중단한다."""
+    global _cancelled
+    p = _active_proc
+    if p and p.poll() is None:
+        _cancelled = True
+        p.kill()
+        return True
+    return False
+
+
 def _stream(cmd: list[str], timeout: int, on_event) -> tuple[list[str], str, int | None]:
     """Codex를 실행하며 stdout JSON 줄을 하나씩 on_event로 넘긴다. (stdout 줄, stderr, 종료 코드 / 시간 초과 None)"""
+    global _active_proc, _cancelled
+    _cancelled = False
     lines: list[str] = []
     with tempfile.TemporaryFile() as err:  # stderr를 파이프로 받으면 두 파이프가 서로 막힐 수 있음
         p = subprocess.Popen(cmd, cwd=_prepare_work_dir(), env=codex_env(), stdout=subprocess.PIPE, stderr=err,
                              stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
                              creationflags=NO_WINDOW)
+        _active_proc = p
         timer = threading.Timer(timeout, p.kill)
         timer.start()
         try:
@@ -286,6 +304,7 @@ def _stream(cmd: list[str], timeout: int, on_event) -> tuple[list[str], str, int
                     pass
             code = p.wait()
         finally:
+            _active_proc = None
             timed_out = not timer.is_alive()
             timer.cancel()
         err.seek(0)
@@ -318,7 +337,9 @@ def run_turn(user_text: str, memory_rules: list[str], thread_id: str | None = No
     att_file = sess.with_suffix(".attached.txt")
     try:
         out, err, code = _stream(cmd, timeout, on_event)
-        if code is None:
+        if _cancelled:
+            ev = Events(error="요청을 중단했습니다")
+        elif code is None:
             ev = Events(error="시간 초과")
         else:
             ev = parse_events(out)
